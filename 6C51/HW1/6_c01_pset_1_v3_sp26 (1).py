@@ -148,7 +148,7 @@ def sweep_hyperparameters(X_train, y_train, X_val, y_val, lmbds, phis):
         for phi in phis:
             theta_hat = fit(X=X_train, y=y_train, phi=phi, lmbd=lmbd)
             y_hat = predict(X=X_val, phi=phi, theta=theta_hat)
-            val_loss = log_loss(y=y_val, y_hat=y_hat)
+            val_loss = logloss(y=y_val, y_hat=y_hat)
             losses.append([val_loss, lmbd, phi, theta_hat])
             # your code goes here
 
@@ -182,7 +182,7 @@ def evaluate_model(theta, phi, X_test, y_test):
     '''
     # TODO: your code goes here
     y_hat = predict(X=X_test, phi=phi, theta=theta)
-    loss = log_loss(y=y_test, y_hat=y_hat)
+    loss = logloss(y=y_test, y_hat=y_hat)
     return loss
 
 
@@ -191,44 +191,7 @@ def evaluate_model(theta, phi, X_test, y_test):
 ###################
 
 
-def train_and_eval_model(X, y, lmbds, phis):
-    '''
-    Uses a feature matrix X and labels y to train and evaluate
-    a logistic regression model.
 
-    Sweeps over all combinations of lambda and phi to choose the
-    best setting.
-
-    Parameters
-    ----------
-    X: np.array
-        2-D feature matrix
-    y: np.array
-        1-D array of targets
-    lmbds: list
-        List of possible settings of regularization term lambda to consider.
-    phis: list
-        List of feature masks to consider. 
-        Note: a feature mask is a boolean array (e.g., [True, False, True]) that
-        specifies what features to use vs ignore.
-    '''
-    # 1. Split data into groups, assumes the data is randomly shuffled beforehand
-    n_samples = len(X)
-    n_train = int(n_samples * 0.5)
-    n_val = int(n_samples * 0.25)
-    X_train, y_train = X[:n_train], y[:n_train]
-    X_val, y_val = X[n_train:n_train+n_val], y[n_train:n_train+n_val]
-    X_test, y_test = X[n_train+n_val:], y[n_train+n_val:]
-
-    # 2. Choose best hyperparameters and train model w/ these parameters
-    # TODO: your code goes here
-    best_lmbd, best_phi, best_theta = sweep_hyperparameters(X_train=X_train,y_train=y_train,X_val=X_val,y_val=y_val,lmbds=lmbds, phis=phis)
-
-    # 3. Produce estimate of how model will perform on unseen data
-    # TODO: your code goes here
-
-    loss =  evaluate_model(theta=best_theta,phi=best_phi,X_test=X_test, y_test=y_test) # replace this line with your code
-    print("Test Loss", loss)
 
 
 train_and_eval_model(X, y, lmbds, phis)
