@@ -1,0 +1,3 @@
+{"sessionId": "76675e", "timestamp": 1775515783288, "location": "hierarchical_evaluation.py:evaluate_binary_edge", "message": "edge_eval", "data": {"parent": "GCAT", "child": "G1", "split": "train", "n": 14465}, "hypothesisId": "B"}
+{"sessionId": "76675e", "timestamp": 1775515783289, "location": "hierarchical_evaluation.py:evaluate_binary", "message": "start", "data": {"n": 14465, "has_pipeline": true, "runId": "post-fix"}, "hypothesisId": "A"}
+{"sessionId": "76675e", "timestamp": 1775515787782, "location": "hierarchical_evaluation.py:evaluate_binary", "message": "timings_sec", "data": {"n": 14465, "batch_path": true, "predict_plus_scores": 4.493, "total": 4.493}, "hypothesisId": "A"}
