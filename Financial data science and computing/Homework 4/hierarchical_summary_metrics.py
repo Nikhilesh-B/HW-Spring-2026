@@ -1,5 +1,6 @@
 """
-Aggregate metrics for hierarchical binary relevance: H1 summaries, pooled edge F1, leaf multilabel F1.
+Aggregate metrics for hierarchical binary relevance: H1 summaries, full-tree training,
+pooled edge F1, leaf multilabel F1.
 
 **Linear model presets** (sklearn stand-ins for Autext-style tools):
 
@@ -24,7 +25,7 @@ except ImportError as e:
 from hierarchical_classifier import BinaryEdgeFactory, MultilabelHierarchyRouter, binary_edge_factory
 from hierarchical_evaluation import evaluate_binary_edges_from_parent
 from hierarchical_training_data import MultilabelBinaryPoolData
-from topic_hierarchy import TopicTree
+from topic_hierarchy import TopicTree, binary_edge_specs
 
 
 def linear_model_factories(
@@ -94,6 +95,113 @@ def fit_parent_edges(
 def fit_h1(router: MultilabelHierarchyRouter, pool: MultilabelBinaryPoolData) -> None:
     """Fit all ``Root → child`` edges (depth 0)."""
     fit_parent_edges(router, pool, router.tree.traversal_root, depth=0)
+
+
+def fit_all_binary_edges(
+    router: MultilabelHierarchyRouter,
+    pool: MultilabelBinaryPoolData,
+    *,
+    verbose: bool = True,
+) -> Dict[str, int]:
+    """
+    Fit **every** binary edge in the taxonomy (all ``binary_edge_specs``): one TF-IDF + linear
+    model per ``(parent, child)`` at branching nodes.
+
+    Skips edges where the **training** pool has a single class. When ``verbose`` is True,
+    prints progress ``[i/N] parent → child (depth d)`` and fit/skip lines so long runs are
+    observable.
+    """
+    specs = binary_edge_specs(router.tree)
+    n_fit = 0
+    n_skip = 0
+    for i, spec in enumerate(specs, start=1):
+        if verbose:
+            print(
+                f"[{i}/{len(specs)}] {spec.parent} → {spec.child}  (depth {spec.depth})",
+                flush=True,
+            )
+        Xtr, ytr = pool.binary_edge_dataset(spec.parent, spec.child, "train")
+        if len(set(ytr)) < 2:
+            n_skip += 1
+            if verbose:
+                print(
+                    f"    skip: need 2 classes in train (n={len(ytr)})",
+                    flush=True,
+                )
+            continue
+        router.fit_edge(spec.parent, spec.child, Xtr, ytr, depth=spec.depth)
+        n_fit += 1
+        if verbose:
+            print(
+                f"    fit: n={len(ytr)}  positives={int(sum(ytr))}",
+                flush=True,
+            )
+    if verbose:
+        print(
+            f"Done fitting: {n_fit} edges trained, {n_skip} skipped (single class), "
+            f"{len(specs)} total specs.",
+            flush=True,
+        )
+    return {
+        "n_specs": len(specs),
+        "n_fitted": n_fit,
+        "n_skipped_single_class_train": n_skip,
+    }
+
+
+def full_tree_test_metrics(
+    router: MultilabelHierarchyRouter,
+    pool: MultilabelBinaryPoolData,
+    tree: TopicTree,
+    split: str = "test",
+) -> Dict[str, float]:
+    """
+    **Whole taxonomy (all branching edges)** on ``split``: pooled micro-F1, macro-F1 over
+    edges, positive-count–weighted F1 (weight each edge’s F1 by number of **y=1** in that
+    edge’s split — emphasizes edges with more positive gold).
+
+    Also runs :func:`leaf_level_evaluation` (leaf multilabel F1 + path-to-gold recall).
+
+    Keys are prefixed with ``ft_`` for edge aggregates and reuse ``leaf_*`` / ``path_*``
+    from leaf evaluation.
+    """
+    edges = [(s.parent, s.child) for s in binary_edge_specs(tree)]
+    edge_stats = pooled_edge_f1_stats(router, pool, edges, split)
+    leaf_stats = leaf_level_evaluation(pool, router, tree, split)
+    out: Dict[str, float] = {
+        "ft_pooled_micro_f1": edge_stats["pooled_micro_f1"],
+        "ft_macro_f1": edge_stats["macro_f1"],
+        "ft_pos_weighted_f1": edge_stats["pos_weighted_f1"],
+        "ft_n_edges_scored": edge_stats["n_edges_used"],
+    }
+    out.update(leaf_stats)
+    return out
+
+
+def train_full_tree_and_summarize(
+    model_name: str,
+    tree: TopicTree,
+    pool: MultilabelBinaryPoolData,
+    factory: BinaryEdgeFactory,
+    *,
+    split: str = "test",
+    verbose: bool = True,
+) -> Tuple[MultilabelHierarchyRouter, Dict[str, Any]]:
+    """
+    Fresh router: :func:`fit_all_binary_edges`, then :func:`full_tree_test_metrics` on
+    ``split`` (default held-out test).
+    """
+    router = MultilabelHierarchyRouter(tree, factory)
+    fit_counts = fit_all_binary_edges(router, pool, verbose=verbose)
+    stats = full_tree_test_metrics(router, pool, tree, split=split)
+    row: Dict[str, Any] = {
+        "model": model_name,
+        **stats,
+        "fit_n_specs": float(fit_counts["n_specs"]),
+        "fit_n_edges_trained": float(fit_counts["n_fitted"]),
+        "fit_n_skipped_single_class": float(fit_counts["n_skipped_single_class_train"]),
+    }
+    return router, row
 
 
 def _predict_labels(
