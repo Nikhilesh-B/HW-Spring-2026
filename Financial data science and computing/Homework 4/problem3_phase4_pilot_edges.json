@@ -1,0 +1,102 @@
+[
+  {
+    "parent": "E21",
+    "child": "E212",
+    "depth": 3
+  },
+  {
+    "parent": "ECAT",
+    "child": "E7",
+    "depth": 1
+  },
+  {
+    "parent": "Root",
+    "child": "MCAT",
+    "depth": 0
+  },
+  {
+    "parent": "G15",
+    "child": "G157",
+    "depth": 3
+  },
+  {
+    "parent": "GCAT",
+    "child": "GWEA",
+    "depth": 1
+  },
+  {
+    "parent": "GCAT",
+    "child": "GSPO",
+    "depth": 1
+  },
+  {
+    "parent": "GCAT",
+    "child": "GPRO",
+    "depth": 1
+  },
+  {
+    "parent": "GCAT",
+    "child": "GDEF",
+    "depth": 1
+  },
+  {
+    "parent": "ECAT",
+    "child": "E6",
+    "depth": 1
+  },
+  {
+    "parent": "E51",
+    "child": "E512",
+    "depth": 3
+  },
+  {
+    "parent": "C18",
+    "child": "C181",
+    "depth": 3
+  },
+  {
+    "parent": "ECAT",
+    "child": "E4",
+    "depth": 1
+  },
+  {
+    "parent": "E13",
+    "child": "E131",
+    "depth": 3
+  },
+  {
+    "parent": "C4",
+    "child": "C42",
+    "depth": 2
+  },
+  {
+    "parent": "CCAT",
+    "child": "C1",
+    "depth": 1
+  },
+  {
+    "parent": "GCAT",
+    "child": "GPOL",
+    "depth": 1
+  },
+  {
+    "parent": "GCAT",
+    "child": "GREL",
+    "depth": 1
+  },
+  {
+    "parent": "C15",
+    "child": "C152",
+    "depth": 3
+  },
+  {
+    "parent": "E14",
+    "child": "E141",
+    "depth": 3
+  },
+  {
+    "parent": "C18",
+    "child": "C183",
+    "depth": 3
+  }
+]

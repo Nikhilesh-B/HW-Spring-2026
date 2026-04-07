@@ -727,12 +727,15 @@ def pilot_kernel_svc_on_edge(
     max_train: int = 4000,
     max_features: int = 8000,
     random_state: int = 42,
+    verbose: bool = True,
 ) -> Dict[str, Dict[str, Any]]:
     """
     **Phase 4 pilot:** fit ``TfidfVectorizer`` + ``sklearn.svm.SVC`` on a **subsample** of the
     **train** split for one edge; compare linear / RBF / polynomial kernels with timing.
 
     Not full-tree — estimates whether nonlinear kernels are worth the cost at all.
+
+    Set ``verbose=True`` to print progress per kernel configuration.
     """
     import time
 
@@ -761,7 +764,13 @@ def pilot_kernel_svc_on_edge(
         "SVC_poly": dict(kernel="poly", C=1.0, degree=2, gamma="scale"),
     }
     out: Dict[str, Dict[str, Any]] = {}
-    for name, skw in configs.items():
+    if verbose:
+        print("\n" + "=" * 72, flush=True)
+        print(f"PHASE 4 (single-edge SVC kernels): {parent} → {child}", flush=True)
+        print("=" * 72 + "\n", flush=True)
+    for ki, (name, skw) in enumerate(configs.items(), start=1):
+        if verbose:
+            print(f"  [{ki}/{len(configs)}] {name}  fitting ...", flush=True)
         t0 = time.perf_counter()
         pipe = Pipeline(
             [("tfidf", TfidfVectorizer(**tfidf_kw)), ("clf", SVC(**skw, max_iter=5000))]
@@ -771,6 +780,8 @@ def pilot_kernel_svc_on_edge(
         y_pred = pipe.predict(X_va)
         f1 = float(f1_score(y_va, y_pred, zero_division=0))
         out[name] = {"f1_val": f1, "fit_time_sec": fit_s, "kernel_params": skw}
+        if verbose:
+            print(f"      ok  val_f1={f1:.4f}  ({fit_s:.2f}s)", flush=True)
     return out
 
 
@@ -779,16 +790,18 @@ def pilot_kernel_compare_on_edges(
     edges: Sequence[Tuple[str, str]],
     *,
     max_train: int = 3000,
+    max_test: Optional[int] = 1500,
     max_features: int = 8000,
     svd_components: int = 100,
     random_state: int = 42,
     restrict_to_parent_subtree: bool = True,
+    verbose: bool = True,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     **Phase 4 (multi-edge pilot):** compare TF-IDF baselines on a fixed list of binary edges.
 
-    For each edge, subsample the **train** split (speed), fit, then score **F1 on the full
-    test** split for that edge. Aggregates:
+    For each edge, subsample the **train** split (speed), fit, then score **F1 on the test**
+    split (optionally **capped** with ``max_test`` so kernel ``SVC`` predict stays fast). Aggregates:
 
     - **macro_f1**: mean of per-edge F1 (edges with <2 classes in test are skipped).
     - **pooled_micro_f1**: one F1 on concatenated (y_true, y_pred) over all edge×test-doc pairs.
@@ -802,6 +815,9 @@ def pilot_kernel_compare_on_edges(
       :class:`~sklearn.preprocessing.PolynomialFeatures` (degree 2) → ``LinearSVC``. This is a
       **simple explicit quadratic** map: squares and pairwise interactions of SVD components (a
       low-dimensional linear subspace of the vocabulary TF-IDF), kept small so training stays fast.
+
+    Set ``verbose=True`` (default) for **Phase 4**-style progress: ``PHASE 4 MODEL [i/n]``, per-edge
+    lines, and ``>>> ... finished`` summaries (same spirit as Phase 2/3 notebooks).
     """
     import time
 
@@ -815,6 +831,34 @@ def pilot_kernel_compare_on_edges(
 
     tfidf_kw = dict(min_df=2, max_features=max_features)
     rng = np.random.RandomState(random_state)
+
+    def _subsample_test_stratified(
+        X: Sequence[Any],
+        y: Sequence[int],
+        *,
+        max_n: Optional[int],
+        rs: int,
+    ) -> Tuple[List[Any], List[int]]:
+        if max_n is None or len(X) <= max_n:
+            return list(X), [int(v) for v in y]
+        from sklearn.model_selection import train_test_split
+
+        Xl = list(X)
+        yl = [int(v) for v in y]
+        try:
+            X_sub, _, y_sub, _ = train_test_split(
+                Xl,
+                yl,
+                train_size=max_n,
+                random_state=rs,
+                stratify=yl,
+            )
+            return X_sub, y_sub
+        except ValueError:
+            idx = np.random.RandomState(rs).choice(
+                len(Xl), size=max_n, replace=False
+            )
+            return [Xl[i] for i in idx], [yl[i] for i in idx]
 
     def _pipelines() -> Dict[str, Any]:
         return {
@@ -864,30 +908,90 @@ def pilot_kernel_compare_on_edges(
         }
 
     pipelines = _pipelines()
+    pipeline_items = list(pipelines.items())
+    n_models = len(pipeline_items)
     summary_rows: List[Dict[str, Any]] = []
     detail: Dict[str, Any] = {"per_edge": {}, "edges": list(edges)}
+    n_edges = len(edges)
 
-    for name, template in pipelines.items():
+    edge_prep: List[Dict[str, Any]] = []
+    for ei, (parent, child) in enumerate(edges, start=1):
+        Xtr, ytr = pool.binary_edge_dataset(
+            parent,
+            child,
+            "train",
+            restrict_to_parent_subtree=restrict_to_parent_subtree,
+        )
+        Xte, yte = pool.binary_edge_dataset(
+            parent,
+            child,
+            "test",
+            restrict_to_parent_subtree=restrict_to_parent_subtree,
+        )
+        if len(Xtr) < 20 or len(set(ytr)) < 2:
+            if verbose:
+                print(
+                    f"  [{ei}/{n_edges}] {parent} → {child}  skip (train)",
+                    flush=True,
+                )
+            edge_prep.append(
+                {"parent": parent, "child": child, "skip": "bad_train"}
+            )
+            continue
+        if not Xte or len(set(yte)) < 2:
+            if verbose:
+                print(
+                    f"  [{ei}/{n_edges}] {parent} → {child}  skip (test)",
+                    flush=True,
+                )
+            edge_prep.append(
+                {"parent": parent, "child": child, "skip": "bad_test"}
+            )
+            continue
+
+        Xte_s, yte_s = _subsample_test_stratified(
+            Xte,
+            yte,
+            max_n=max_test,
+            rs=random_state + ei * 9973,
+        )
+
+        idx = np.arange(len(Xtr))
+        if len(idx) > max_train:
+            idx = rng.choice(idx, size=max_train, replace=False)
+        X_fit = [Xtr[i] for i in idx]
+        y_fit = [int(ytr[i]) for i in idx]
+
+        edge_prep.append(
+            {
+                "parent": parent,
+                "child": child,
+                "skip": None,
+                "X_fit": X_fit,
+                "y_fit": y_fit,
+                "Xte": Xte_s,
+                "yte": yte_s,
+            }
+        )
+
+    for mi, (name, template) in enumerate(pipeline_items, start=1):
+        if verbose:
+            print("\n" + "=" * 72, flush=True)
+            print(
+                f"PHASE 4 MODEL [{mi}/{n_models}] {name}  ({n_edges} pilot edges)",
+                flush=True,
+            )
+            print("=" * 72, flush=True)
         t0 = time.perf_counter()
         per_edge_f1: List[float] = []
         yt_all: List[int] = []
         yp_all: List[int] = []
         edge_records: List[Dict[str, Any]] = []
 
-        for parent, child in edges:
-            Xtr, ytr = pool.binary_edge_dataset(
-                parent,
-                child,
-                "train",
-                restrict_to_parent_subtree=restrict_to_parent_subtree,
-            )
-            Xte, yte = pool.binary_edge_dataset(
-                parent,
-                child,
-                "test",
-                restrict_to_parent_subtree=restrict_to_parent_subtree,
-            )
-            if len(Xtr) < 20 or len(set(ytr)) < 2:
+        for ei, ep in enumerate(edge_prep, start=1):
+            parent, child = ep["parent"], ep["child"]
+            sk = ep.get("skip")
+            if sk == "bad_train":
                 edge_records.append(
                     {
                         "parent": parent,
@@ -896,7 +1000,7 @@ def pilot_kernel_compare_on_edges(
                     }
                 )
                 continue
-            if not Xte or len(set(yte)) < 2:
+            if sk == "bad_test":
                 edge_records.append(
                     {
                         "parent": parent,
@@ -906,17 +1010,29 @@ def pilot_kernel_compare_on_edges(
                 )
                 continue
 
-            idx = np.arange(len(Xtr))
-            if len(idx) > max_train:
-                idx = rng.choice(idx, size=max_train, replace=False)
-            X_fit = [Xtr[i] for i in idx]
-            y_fit = [int(ytr[i]) for i in idx]
+            X_fit = ep["X_fit"]
+            y_fit = ep["y_fit"]
+            Xte = ep["Xte"]
+            yte = ep["yte"]
 
+            if verbose:
+                print(
+                    f"  [{ei}/{n_edges}] {parent} → {child}  "
+                    f"fit: n_train_fit={len(X_fit)}  n_test={len(Xte)} ...",
+                    flush=True,
+                )
+            t_edge = time.perf_counter()
             pipe = clone(template)
             pipe.fit(X_fit, y_fit)
+            fit_edge_s = time.perf_counter() - t_edge
             y_pred = np.asarray(pipe.predict(Xte), dtype=int)
             yt = np.asarray(yte, dtype=int)
             f1e = float(f1_score(yt, y_pred, zero_division=0))
+            if verbose:
+                print(
+                    f"    ok  f1_test={f1e:.4f}  ({fit_edge_s:.1f}s)",
+                    flush=True,
+                )
             per_edge_f1.append(f1e)
             yt_all.extend(yt.tolist())
             yp_all.extend(y_pred.tolist())
@@ -945,6 +1061,12 @@ def pilot_kernel_compare_on_edges(
                 "total_fit_eval_sec": fit_s,
             }
         )
+        if verbose:
+            print(
+                f"\n>>> {name} finished in {fit_s:.1f}s  "
+                f"macro_f1_test={macro_f1:.4f}  pooled_micro_f1_test={pooled_f1:.4f}\n",
+                flush=True,
+            )
 
     df = pd.DataFrame(summary_rows).set_index("model")
     detail["summary"] = df.reset_index().to_dict(orient="records")
