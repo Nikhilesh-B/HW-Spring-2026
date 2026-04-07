@@ -774,6 +774,183 @@ def pilot_kernel_svc_on_edge(
     return out
 
 
+def pilot_kernel_compare_on_edges(
+    pool: MultilabelBinaryPoolData,
+    edges: Sequence[Tuple[str, str]],
+    *,
+    max_train: int = 3000,
+    max_features: int = 8000,
+    svd_components: int = 100,
+    random_state: int = 42,
+    restrict_to_parent_subtree: bool = True,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    **Phase 4 (multi-edge pilot):** compare TF-IDF baselines on a fixed list of binary edges.
+
+    For each edge, subsample the **train** split (speed), fit, then score **F1 on the full
+    test** split for that edge. Aggregates:
+
+    - **macro_f1**: mean of per-edge F1 (edges with <2 classes in test are skipped).
+    - **pooled_micro_f1**: one F1 on concatenated (y_true, y_pred) over all edge×test-doc pairs.
+
+    **Models**
+
+    - ``linear_LinearSVC`` — ``TfidfVectorizer`` + :class:`~sklearn.svm.LinearSVC` (same spirit
+      as the full-tree linear router).
+    - ``RBF_SVC`` — TF-IDF + :class:`~sklearn.svm.SVC` with RBF kernel.
+    - ``explicit_poly2`` — TF-IDF → :class:`~sklearn.decomposition.TruncatedSVD` →
+      :class:`~sklearn.preprocessing.PolynomialFeatures` (degree 2) → ``LinearSVC``. This is a
+      **simple explicit quadratic** map: squares and pairwise interactions of SVD components (a
+      low-dimensional linear subspace of the vocabulary TF-IDF), kept small so training stays fast.
+    """
+    import time
+
+    from sklearn.base import clone
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics import f1_score
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import PolynomialFeatures
+    from sklearn.svm import LinearSVC, SVC
+
+    tfidf_kw = dict(min_df=2, max_features=max_features)
+    rng = np.random.RandomState(random_state)
+
+    def _pipelines() -> Dict[str, Any]:
+        return {
+            "linear_LinearSVC": Pipeline(
+                [
+                    ("tfidf", TfidfVectorizer(**tfidf_kw)),
+                    (
+                        "clf",
+                        LinearSVC(C=1.0, dual=False, max_iter=8000),
+                    ),
+                ]
+            ),
+            "RBF_SVC": Pipeline(
+                [
+                    ("tfidf", TfidfVectorizer(**tfidf_kw)),
+                    (
+                        "clf",
+                        SVC(
+                            kernel="rbf",
+                            C=1.0,
+                            gamma="scale",
+                            max_iter=5000,
+                        ),
+                    ),
+                ]
+            ),
+            "explicit_poly2": Pipeline(
+                [
+                    ("tfidf", TfidfVectorizer(**tfidf_kw)),
+                    (
+                        "svd",
+                        TruncatedSVD(
+                            n_components=svd_components,
+                            random_state=random_state,
+                        ),
+                    ),
+                    (
+                        "poly",
+                        PolynomialFeatures(degree=2, include_bias=False),
+                    ),
+                    (
+                        "clf",
+                        LinearSVC(C=1.0, dual=False, max_iter=8000),
+                    ),
+                ]
+            ),
+        }
+
+    pipelines = _pipelines()
+    summary_rows: List[Dict[str, Any]] = []
+    detail: Dict[str, Any] = {"per_edge": {}, "edges": list(edges)}
+
+    for name, template in pipelines.items():
+        t0 = time.perf_counter()
+        per_edge_f1: List[float] = []
+        yt_all: List[int] = []
+        yp_all: List[int] = []
+        edge_records: List[Dict[str, Any]] = []
+
+        for parent, child in edges:
+            Xtr, ytr = pool.binary_edge_dataset(
+                parent,
+                child,
+                "train",
+                restrict_to_parent_subtree=restrict_to_parent_subtree,
+            )
+            Xte, yte = pool.binary_edge_dataset(
+                parent,
+                child,
+                "test",
+                restrict_to_parent_subtree=restrict_to_parent_subtree,
+            )
+            if len(Xtr) < 20 or len(set(ytr)) < 2:
+                edge_records.append(
+                    {
+                        "parent": parent,
+                        "child": child,
+                        "skipped": "bad_train",
+                    }
+                )
+                continue
+            if not Xte or len(set(yte)) < 2:
+                edge_records.append(
+                    {
+                        "parent": parent,
+                        "child": child,
+                        "skipped": "bad_test",
+                    }
+                )
+                continue
+
+            idx = np.arange(len(Xtr))
+            if len(idx) > max_train:
+                idx = rng.choice(idx, size=max_train, replace=False)
+            X_fit = [Xtr[i] for i in idx]
+            y_fit = [int(ytr[i]) for i in idx]
+
+            pipe = clone(template)
+            pipe.fit(X_fit, y_fit)
+            y_pred = np.asarray(pipe.predict(Xte), dtype=int)
+            yt = np.asarray(yte, dtype=int)
+            f1e = float(f1_score(yt, y_pred, zero_division=0))
+            per_edge_f1.append(f1e)
+            yt_all.extend(yt.tolist())
+            yp_all.extend(y_pred.tolist())
+            edge_records.append(
+                {
+                    "parent": parent,
+                    "child": child,
+                    "f1_test": f1e,
+                    "n_test": len(yt),
+                }
+            )
+
+        fit_s = time.perf_counter() - t0
+        macro_f1 = float(np.mean(per_edge_f1)) if per_edge_f1 else float("nan")
+        pooled_f1 = (
+            float(f1_score(yt_all, yp_all, zero_division=0)) if yt_all else float("nan")
+        )
+        detail["per_edge"][name] = edge_records
+
+        summary_rows.append(
+            {
+                "model": name,
+                "macro_f1_test": macro_f1,
+                "pooled_micro_f1_test": pooled_f1,
+                "n_edges_scored": len(per_edge_f1),
+                "total_fit_eval_sec": fit_s,
+            }
+        )
+
+    df = pd.DataFrame(summary_rows).set_index("model")
+    detail["summary"] = df.reset_index().to_dict(orient="records")
+    return df, detail
+
+
 def comparison_table(rows: List[Dict[str, Any]]) -> pd.DataFrame:
     """Build a summary table from rows produced by :func:`summary_row`."""
     return pd.DataFrame(rows)

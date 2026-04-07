@@ -1,0 +1,70 @@
+{
+  "0": [
+    {
+      "parent": "Root",
+      "child": "CCAT",
+      "depth": 0
+    },
+    {
+      "parent": "Root",
+      "child": "MCAT",
+      "depth": 0
+    },
+    {
+      "parent": "Root",
+      "child": "ECAT",
+      "depth": 0
+    }
+  ],
+  "1": [
+    {
+      "parent": "CCAT",
+      "child": "C3",
+      "depth": 1
+    },
+    {
+      "parent": "GCAT",
+      "child": "GFAS",
+      "depth": 1
+    },
+    {
+      "parent": "ECAT",
+      "child": "E6",
+      "depth": 1
+    }
+  ],
+  "2": [
+    {
+      "parent": "C3",
+      "child": "C32",
+      "depth": 2
+    },
+    {
+      "parent": "C4",
+      "child": "C41",
+      "depth": 2
+    },
+    {
+      "parent": "C4",
+      "child": "C42",
+      "depth": 2
+    }
+  ],
+  "3": [
+    {
+      "parent": "E21",
+      "child": "E211",
+      "depth": 3
+    },
+    {
+      "parent": "G15",
+      "child": "G152",
+      "depth": 3
+    },
+    {
+      "parent": "G15",
+      "child": "G157",
+      "depth": 3
+    }
+  ]
+}
