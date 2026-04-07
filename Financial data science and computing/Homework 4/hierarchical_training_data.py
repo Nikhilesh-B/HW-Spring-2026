@@ -245,9 +245,22 @@ class MultilabelBinaryPoolData:
         child: str,
         split: Split,
         input_column: str = "article",
+        *,
+        restrict_to_parent_subtree: bool = True,
     ) -> Tuple[List[Any], List[int]]:
         """
-        All pool articles in the split with texts; ``y`` is 0/1 for subtree(child) membership.
+        Build ``(X, y)`` for the binary edge ``parent → child``.
+
+        **Labels:** ``y = 1`` iff the article's gold topics intersect ``subtree(child)``;
+        else ``0`` (same as :meth:`gold_positive_edge` on ``child``).
+
+        **Rows (``restrict_to_parent_subtree``):**
+
+        - ``True`` (**local** / parent-filtered): include only articles whose gold intersects
+          ``subtree(parent)``. Deeper edges then train on a smaller ``n`` than the full split.
+          Articles with **no** gold labels are excluded (they never match any subtree).
+        - ``False`` (**global** / legacy): include every article in the split; negatives for
+          ``child`` can be documents whose gold never touches ``parent`` at all.
         """
         ids = self._train_ids if split == "train" else self._test_ids
         art = self._articles.set_index("id")
@@ -255,6 +268,8 @@ class MultilabelBinaryPoolData:
         y: List[int] = []
         for aid in ids:
             if aid not in art.index:
+                continue
+            if restrict_to_parent_subtree and not self.gold_positive_edge(aid, parent):
                 continue
             row = art.loc[aid]
             if isinstance(row, pd.DataFrame):

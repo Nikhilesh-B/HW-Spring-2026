@@ -196,6 +196,7 @@ def evaluate_binary_edge(
     split: str = "test",
     *,
     input_column: str = "article",
+    restrict_to_parent_subtree: bool = True,
 ) -> Optional[Dict[str, float]]:
     """
     Metrics for **one** binary classifier: the edge ``parent -> child``.
@@ -213,7 +214,11 @@ def evaluate_binary_edge(
     if m is None:
         return None
     X, y_true = pool.binary_edge_dataset(
-        parent, child, split, input_column=input_column
+        parent,
+        child,
+        split,
+        input_column=input_column,
+        restrict_to_parent_subtree=restrict_to_parent_subtree,
     )
     if not X:
         return None
@@ -240,6 +245,7 @@ def evaluate_binary_edges_from_parent(
     split: str = "test",
     *,
     input_column: str = "article",
+    restrict_to_parent_subtree: bool = True,
 ) -> Dict[str, Dict[str, float]]:
     """
     Metrics for **each** binary classifier on outgoing edges from ``parent`` (same ``split``).
@@ -251,7 +257,13 @@ def evaluate_binary_edges_from_parent(
     out: Dict[str, Dict[str, float]] = {}
     for c in router.tree.children.get(parent, []):
         met = evaluate_binary_edge(
-            router, pool, parent, c, split, input_column=input_column
+            router,
+            pool,
+            parent,
+            c,
+            split,
+            input_column=input_column,
+            restrict_to_parent_subtree=restrict_to_parent_subtree,
         )
         if met is not None:
             out[c] = met
@@ -302,6 +314,7 @@ def evaluate_all_binary_edges_from_pool(
     *,
     edges: Optional[Sequence[BinaryEdgeSpec]] = None,
     input_column: str = "article",
+    restrict_to_parent_subtree: bool = True,
 ) -> Dict[Tuple[str, str], Dict[str, float]]:
     """
     Convenience: same as :func:`evaluate_all_binary_edges`, with ``(X, y)`` taken from
@@ -309,7 +322,11 @@ def evaluate_all_binary_edges_from_pool(
     """
     def _get_xy(spec: BinaryEdgeSpec) -> Tuple[Sequence[Any], Sequence[int]]:
         return pool.binary_edge_dataset(
-            spec.parent, spec.child, split, input_column=input_column
+            spec.parent,
+            spec.child,
+            split,
+            input_column=input_column,
+            restrict_to_parent_subtree=restrict_to_parent_subtree,
         )
 
     return evaluate_all_binary_edges(router, _get_xy, edges=edges)

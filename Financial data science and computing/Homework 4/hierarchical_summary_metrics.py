@@ -17,7 +17,13 @@ import numpy as np
 import pandas as pd
 
 try:
-    from sklearn.metrics import f1_score
+    from sklearn.metrics import (
+        accuracy_score,
+        confusion_matrix,
+        f1_score,
+        precision_score,
+        recall_score,
+    )
     from sklearn.preprocessing import MultiLabelBinarizer
 except ImportError as e:
     raise ImportError("hierarchical_summary_metrics requires scikit-learn") from e
@@ -83,18 +89,33 @@ def fit_parent_edges(
     pool: MultilabelBinaryPoolData,
     parent: str,
     depth: int,
+    *,
+    restrict_to_parent_subtree: bool = True,
 ) -> None:
     """Fit every binary edge ``parent → child`` where training labels have two classes."""
     for child in router.tree.children.get(parent, []):
-        Xtr, ytr = pool.binary_edge_dataset(parent, child, "train")
+        Xtr, ytr = pool.binary_edge_dataset(
+            parent, child, "train", restrict_to_parent_subtree=restrict_to_parent_subtree
+        )
         if len(set(ytr)) < 2:
             continue
         router.fit_edge(parent, child, Xtr, ytr, depth=depth)
 
 
-def fit_h1(router: MultilabelHierarchyRouter, pool: MultilabelBinaryPoolData) -> None:
+def fit_h1(
+    router: MultilabelHierarchyRouter,
+    pool: MultilabelBinaryPoolData,
+    *,
+    restrict_to_parent_subtree: bool = True,
+) -> None:
     """Fit all ``Root → child`` edges (depth 0)."""
-    fit_parent_edges(router, pool, router.tree.traversal_root, depth=0)
+    fit_parent_edges(
+        router,
+        pool,
+        router.tree.traversal_root,
+        depth=0,
+        restrict_to_parent_subtree=restrict_to_parent_subtree,
+    )
 
 
 def fit_all_binary_edges(
@@ -102,6 +123,7 @@ def fit_all_binary_edges(
     pool: MultilabelBinaryPoolData,
     *,
     verbose: bool = True,
+    restrict_to_parent_subtree: bool = True,
 ) -> Dict[str, int]:
     """
     Fit **every** binary edge in the taxonomy (all ``binary_edge_specs``): one TF-IDF + linear
@@ -110,6 +132,9 @@ def fit_all_binary_edges(
     Skips edges where the **training** pool has a single class. When ``verbose`` is True,
     prints progress ``[i/N] parent → child (depth d)`` and fit/skip lines so long runs are
     observable.
+
+    ``restrict_to_parent_subtree``: if True (default), each edge trains only on articles whose
+    gold intersects ``subtree(parent)``; if False, uses the legacy global pool (all split rows).
     """
     specs = binary_edge_specs(router.tree)
     n_fit = 0
@@ -120,7 +145,12 @@ def fit_all_binary_edges(
                 f"[{i}/{len(specs)}] {spec.parent} → {spec.child}  (depth {spec.depth})",
                 flush=True,
             )
-        Xtr, ytr = pool.binary_edge_dataset(spec.parent, spec.child, "train")
+        Xtr, ytr = pool.binary_edge_dataset(
+            spec.parent,
+            spec.child,
+            "train",
+            restrict_to_parent_subtree=restrict_to_parent_subtree,
+        )
         if len(set(ytr)) < 2:
             n_skip += 1
             if verbose:
@@ -154,25 +184,47 @@ def full_tree_test_metrics(
     pool: MultilabelBinaryPoolData,
     tree: TopicTree,
     split: str = "test",
-) -> Dict[str, float]:
+    *,
+    restrict_to_parent_subtree: bool = True,
+) -> Dict[str, Any]:
     """
-    **Whole taxonomy (all branching edges)** on ``split``: pooled micro-F1, macro-F1 over
-    edges, positive-count–weighted F1 (weight each edge’s F1 by number of **y=1** in that
-    edge’s split — emphasizes edges with more positive gold).
+    **Whole taxonomy (all branching edges)** on ``split``: same aggregates as
+    :func:`pooled_edge_f1_stats` — pooled / macro / positive-weighted **F1**, **precision**,
+    **recall**, **accuracy** over all edge×document pairs; **pooled** 2×2 **confusion matrix**
+    and **per-edge** confusion matrices (see keys below).
 
     Also runs :func:`leaf_level_evaluation` (leaf multilabel F1 + path-to-gold recall).
 
-    Keys are prefixed with ``ft_`` for edge aggregates and reuse ``leaf_*`` / ``path_*``
-    from leaf evaluation.
+    **Scalar keys** (``ft_*``): edge aggregates. **Non-scalar:** ``ft_confusion_matrix_pooled``
+    (``ndarray`` shape (2, 2), rows=true class, cols=predicted, ``labels=[0,1]``), and
+    ``ft_per_edge_confusion`` (``dict`` mapping ``(parent, child) -> ndarray(2, 2)``).
+
+    ``restrict_to_parent_subtree`` must match how edges were trained (see
+    :func:`fit_all_binary_edges`).
     """
     edges = [(s.parent, s.child) for s in binary_edge_specs(tree)]
-    edge_stats = pooled_edge_f1_stats(router, pool, edges, split)
+    edge_stats = pooled_edge_f1_stats(
+        router,
+        pool,
+        edges,
+        split,
+        restrict_to_parent_subtree=restrict_to_parent_subtree,
+    )
     leaf_stats = leaf_level_evaluation(pool, router, tree, split)
-    out: Dict[str, float] = {
+    out: Dict[str, Any] = {
         "ft_pooled_micro_f1": edge_stats["pooled_micro_f1"],
         "ft_macro_f1": edge_stats["macro_f1"],
         "ft_pos_weighted_f1": edge_stats["pos_weighted_f1"],
         "ft_n_edges_scored": edge_stats["n_edges_used"],
+        "ft_pooled_micro_precision": edge_stats["pooled_micro_precision"],
+        "ft_pooled_micro_recall": edge_stats["pooled_micro_recall"],
+        "ft_pooled_micro_accuracy": edge_stats["pooled_micro_accuracy"],
+        "ft_macro_precision": edge_stats["macro_precision"],
+        "ft_macro_recall": edge_stats["macro_recall"],
+        "ft_pos_weighted_precision": edge_stats["pos_weighted_precision"],
+        "ft_pos_weighted_recall": edge_stats["pos_weighted_recall"],
+        "ft_confusion_matrix_pooled": edge_stats["confusion_matrix_pooled"],
+        "ft_per_edge_confusion": edge_stats["per_edge_confusion"],
     }
     out.update(leaf_stats)
     return out
@@ -186,14 +238,26 @@ def train_full_tree_and_summarize(
     *,
     split: str = "test",
     verbose: bool = True,
+    restrict_to_parent_subtree: bool = True,
 ) -> Tuple[MultilabelHierarchyRouter, Dict[str, Any]]:
     """
     Fresh router: :func:`fit_all_binary_edges`, then :func:`full_tree_test_metrics` on
     ``split`` (default held-out test).
     """
     router = MultilabelHierarchyRouter(tree, factory)
-    fit_counts = fit_all_binary_edges(router, pool, verbose=verbose)
-    stats = full_tree_test_metrics(router, pool, tree, split=split)
+    fit_counts = fit_all_binary_edges(
+        router,
+        pool,
+        verbose=verbose,
+        restrict_to_parent_subtree=restrict_to_parent_subtree,
+    )
+    stats = full_tree_test_metrics(
+        router,
+        pool,
+        tree,
+        split=split,
+        restrict_to_parent_subtree=restrict_to_parent_subtree,
+    )
     row: Dict[str, Any] = {
         "model": model_name,
         **stats,
@@ -210,11 +274,15 @@ def _predict_labels(
     parent: str,
     child: str,
     split: str,
+    *,
+    restrict_to_parent_subtree: bool = True,
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     m = router.edge_model(parent, child)
     if m is None:
         return None
-    X, y_true = pool.binary_edge_dataset(parent, child, split)
+    X, y_true = pool.binary_edge_dataset(
+        parent, child, split, restrict_to_parent_subtree=restrict_to_parent_subtree
+    )
     if not X:
         return None
     pipe = getattr(m, "pipeline", None)
@@ -230,6 +298,8 @@ def pooled_edge_f1_stats(
     pool: MultilabelBinaryPoolData,
     edges: Sequence[Tuple[str, str]],
     split: str,
+    *,
+    restrict_to_parent_subtree: bool = True,
 ) -> Dict[str, float]:
     """
     Pool predictions over listed edges (same docs repeated per edge).
@@ -237,37 +307,96 @@ def pooled_edge_f1_stats(
     - **pooled_micro_f1**: one F1 on concatenated (y_true, y_pred) over all edge×doc pairs.
     - **macro_f1**: mean of per-edge F1 (edges with <2 classes in split skipped).
     - **pos_weighted_f1**: Σ_w f1_e with weights w = positive count on that edge in the split.
+
+    Same **macro** / **pooled_micro** / **pos_weighted** pattern for **precision** and **recall**.
+
+    **confusion_matrix_pooled**: sklearn ``confusion_matrix(..., labels=[0, 1])`` on pooled
+    predictions (rows = true class, cols = predicted).
+
+    **per_edge_confusion**: ``{(parent, child): ndarray(2, 2)}`` for each scored edge.
+
+    ``restrict_to_parent_subtree`` must match training (see :meth:`MultilabelBinaryPoolData.binary_edge_dataset`).
     """
     yt_all: List[int] = []
     yp_all: List[int] = []
     f1_list: List[float] = []
+    prec_list: List[float] = []
+    rec_list: List[float] = []
     pos_counts: List[int] = []
+    per_edge_cm: Dict[Tuple[str, str], np.ndarray] = {}
 
     for parent, child in edges:
-        pr = _predict_labels(router, pool, parent, child, split)
+        pr = _predict_labels(
+            router,
+            pool,
+            parent,
+            child,
+            split,
+            restrict_to_parent_subtree=restrict_to_parent_subtree,
+        )
         if pr is None:
             continue
         yt, yp = pr
         if len(np.unique(yt)) < 2:
             continue
         f1e = float(f1_score(yt, yp, zero_division=0))
+        prece = float(precision_score(yt, yp, zero_division=0))
+        rece = float(recall_score(yt, yp, zero_division=0))
         f1_list.append(f1e)
+        prec_list.append(prece)
+        rec_list.append(rece)
         pos_counts.append(int(np.sum(yt)))
         yt_all.extend(yt.tolist())
         yp_all.extend(yp.tolist())
+        per_edge_cm[(parent, child)] = confusion_matrix(yt, yp, labels=[0, 1])
 
     pooled = (
         float(f1_score(yt_all, yp_all, zero_division=0)) if yt_all else float("nan")
     )
     macro = float(np.mean(f1_list)) if f1_list else float("nan")
+    macro_p = float(np.mean(prec_list)) if prec_list else float("nan")
+    macro_r = float(np.mean(rec_list)) if rec_list else float("nan")
     sp = sum(pos_counts)
     pos_w = (
         float(np.dot(pos_counts, f1_list) / sp) if sp > 0 and f1_list else float("nan")
+    )
+    pos_w_p = (
+        float(np.dot(pos_counts, prec_list) / sp) if sp > 0 and prec_list else float("nan")
+    )
+    pos_w_r = (
+        float(np.dot(pos_counts, rec_list) / sp) if sp > 0 and rec_list else float("nan")
+    )
+    pooled_p = (
+        float(precision_score(yt_all, yp_all, zero_division=0))
+        if yt_all
+        else float("nan")
+    )
+    pooled_r = (
+        float(recall_score(yt_all, yp_all, zero_division=0))
+        if yt_all
+        else float("nan")
+    )
+    pooled_acc = (
+        float(accuracy_score(yt_all, yp_all)) if yt_all else float("nan")
+    )
+    cm_pooled = (
+        confusion_matrix(yt_all, yp_all, labels=[0, 1])
+        if yt_all
+        else np.zeros((2, 2), dtype=int)
     )
     return {
         "pooled_micro_f1": pooled,
         "macro_f1": macro,
         "pos_weighted_f1": pos_w,
+        "macro_precision": macro_p,
+        "macro_recall": macro_r,
+        "pos_weighted_precision": pos_w_p,
+        "pos_weighted_recall": pos_w_r,
+        "pooled_micro_precision": pooled_p,
+        "pooled_micro_recall": pooled_r,
+        "pooled_micro_accuracy": pooled_acc,
+        "confusion_matrix_pooled": cm_pooled,
+        "per_edge_confusion": per_edge_cm,
         "n_edges_used": float(len(f1_list)),
     }
 
@@ -448,26 +577,52 @@ def summary_row(
     split: str = "test",
     *,
     include_leaf: bool = False,
+    restrict_to_parent_subtree: bool = True,
 ) -> Dict[str, Any]:
     """
-    One row of summary metrics for **H1 (Root)**: macro / pooled-micro / pos-weighted F1.
+    One row of summary metrics for **H1 (Root)**: macro / pooled-micro / pos-weighted F1,
+    the same three aggregates for **precision** and **recall**, plus **pooled** and
+    **per-edge** binary confusion matrices.
 
     Set ``include_leaf=True`` to also add :func:`leaf_level_evaluation` (multilabel leaf F1
     + path-to-gold branching recall; slower than H1-only).
+
+    ``restrict_to_parent_subtree`` must match how H1 was fitted (see :func:`fit_h1`).
     """
     root = tree.traversal_root
     h1_edges = h1_edge_tuples(tree)
-    per = evaluate_binary_edges_from_parent(router, pool, root, split=split)
+    per = evaluate_binary_edges_from_parent(
+        router,
+        pool,
+        root,
+        split=split,
+        restrict_to_parent_subtree=restrict_to_parent_subtree,
+    )
     h1_f1s = [per[ch]["f1"] for ch in per if "f1" in per[ch]]
     h1_macro = float(np.mean(h1_f1s)) if h1_f1s else float("nan")
 
-    pool_h1 = pooled_edge_f1_stats(router, pool, h1_edges, split)
+    pool_h1 = pooled_edge_f1_stats(
+        router,
+        pool,
+        h1_edges,
+        split,
+        restrict_to_parent_subtree=restrict_to_parent_subtree,
+    )
 
     row: Dict[str, Any] = {
         "model": name,
         "h1_macro_f1": h1_macro,
+        "h1_macro_precision": pool_h1["macro_precision"],
+        "h1_macro_recall": pool_h1["macro_recall"],
         "h1_pooled_micro_f1": pool_h1["pooled_micro_f1"],
+        "h1_pooled_micro_precision": pool_h1["pooled_micro_precision"],
+        "h1_pooled_micro_recall": pool_h1["pooled_micro_recall"],
+        "h1_pooled_micro_accuracy": pool_h1["pooled_micro_accuracy"],
         "h1_pos_weighted_f1": pool_h1["pos_weighted_f1"],
+        "h1_pos_weighted_precision": pool_h1["pos_weighted_precision"],
+        "h1_pos_weighted_recall": pool_h1["pos_weighted_recall"],
+        "h1_pooled_confusion_matrix": pool_h1["confusion_matrix_pooled"],
+        "h1_per_edge_confusion": pool_h1["per_edge_confusion"],
     }
     if include_leaf:
         row.update(leaf_level_evaluation(pool, router, tree, split))
@@ -487,11 +642,18 @@ def train_and_summarize(
     split: str = "test",
     *,
     include_leaf: bool = False,
+    restrict_to_parent_subtree: bool = True,
 ) -> Tuple[MultilabelHierarchyRouter, Dict[str, Any]]:
     """Fresh router: fit H1 only, return (router, summary dict for split)."""
     router = MultilabelHierarchyRouter(tree, factory)
-    fit_h1(router, pool)
+    fit_h1(router, pool, restrict_to_parent_subtree=restrict_to_parent_subtree)
     summ = summary_row(
-        model_name, router, pool, tree, split=split, include_leaf=include_leaf
+        model_name,
+        router,
+        pool,
+        tree,
+        split=split,
+        include_leaf=include_leaf,
+        restrict_to_parent_subtree=restrict_to_parent_subtree,
     )
     return router, summ
