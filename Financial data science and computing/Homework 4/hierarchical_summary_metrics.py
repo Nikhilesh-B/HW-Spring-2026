@@ -401,6 +401,40 @@ def pooled_edge_f1_stats(
     }
 
 
+def pooled_edge_f1_stats_by_parent_depth(
+    router: MultilabelHierarchyRouter,
+    pool: MultilabelBinaryPoolData,
+    tree: TopicTree,
+    split: str,
+    *,
+    restrict_to_parent_subtree: bool = True,
+) -> Dict[int, Dict[str, Any]]:
+    """
+    Same metrics as :func:`pooled_edge_f1_stats`, computed **separately for each parent depth**
+    (``BinaryEdgeSpec.depth``: distance of the **parent** node from ``traversal_root``).
+
+    Keys are integer depths; values are the full dict from ``pooled_edge_f1_stats`` for edges
+    at that depth only (empty depths omitted).
+    """
+    by_depth: Dict[int, List[Tuple[str, str]]] = {}
+    for spec in binary_edge_specs(tree):
+        by_depth.setdefault(spec.depth, []).append((spec.parent, spec.child))
+    out: Dict[int, Dict[str, Any]] = {}
+    for d in sorted(by_depth):
+        edges = by_depth[d]
+        if not edges:
+            continue
+        st = pooled_edge_f1_stats(
+            router,
+            pool,
+            edges,
+            split,
+            restrict_to_parent_subtree=restrict_to_parent_subtree,
+        )
+        out[d] = st
+    return out
+
+
 def h1_edge_tuples(tree: TopicTree) -> List[Tuple[str, str]]:
     r = tree.traversal_root
     return [(r, c) for c in tree.children.get(r, [])]
@@ -627,6 +661,61 @@ def summary_row(
     if include_leaf:
         row.update(leaf_level_evaluation(pool, router, tree, split))
     return row
+
+
+def pilot_kernel_svc_on_edge(
+    pool: MultilabelBinaryPoolData,
+    parent: str,
+    child: str,
+    *,
+    max_train: int = 4000,
+    max_features: int = 8000,
+    random_state: int = 42,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    **Phase 4 pilot:** fit ``TfidfVectorizer`` + ``sklearn.svm.SVC`` on a **subsample** of the
+    **train** split for one edge; compare linear / RBF / polynomial kernels with timing.
+
+    Not full-tree — estimates whether nonlinear kernels are worth the cost at all.
+    """
+    import time
+
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics import f1_score
+    from sklearn.model_selection import train_test_split
+    from sklearn.pipeline import Pipeline
+    from sklearn.svm import SVC
+
+    X, y = pool.binary_edge_dataset(parent, child, "train")
+    if len(X) < 20 or len(set(y)) < 2:
+        return {}
+    rng = np.random.RandomState(random_state)
+    idx = np.arange(len(X))
+    if len(idx) > max_train:
+        idx = rng.choice(idx, size=max_train, replace=False)
+    Xs = [X[i] for i in idx]
+    ys = [int(y[i]) for i in idx]
+    X_tr, X_va, y_tr, y_va = train_test_split(
+        Xs, ys, test_size=0.2, random_state=random_state, stratify=ys
+    )
+    tfidf_kw = dict(min_df=2, max_features=max_features)
+    configs = {
+        "SVC_linear": dict(kernel="linear", C=1.0),
+        "SVC_rbf": dict(kernel="rbf", C=1.0, gamma="scale"),
+        "SVC_poly": dict(kernel="poly", C=1.0, degree=2, gamma="scale"),
+    }
+    out: Dict[str, Dict[str, Any]] = {}
+    for name, skw in configs.items():
+        t0 = time.perf_counter()
+        pipe = Pipeline(
+            [("tfidf", TfidfVectorizer(**tfidf_kw)), ("clf", SVC(**skw, max_iter=5000))]
+        )
+        pipe.fit(X_tr, y_tr)
+        fit_s = time.perf_counter() - t0
+        y_pred = pipe.predict(X_va)
+        f1 = float(f1_score(y_va, y_pred, zero_division=0))
+        out[name] = {"f1_val": f1, "fit_time_sec": fit_s, "kernel_params": skw}
+    return out
 
 
 def comparison_table(rows: List[Dict[str, Any]]) -> pd.DataFrame:

@@ -191,7 +191,8 @@ class HierarchicalClassifier:
                 raise RuntimeError(f"No model fitted for branching node {u!r}")
             nxt = model.predict_next_child(x)
             if nxt not in chs:
-                raise ValueError(f"Predicted child {nxt!r} not among children of {u!r}: {chs}")
+                raise ValueError(
+                    f"Predicted child {nxt!r} not among children of {u!r}: {chs}")
             u = nxt
             if stop_at_leaf and not self.tree.children.get(u):
                 path.append(u)
@@ -251,7 +252,8 @@ class MultilabelHierarchyRouter:
     ) -> None:
         self.tree = tree
         self.model_factory = model_factory
-        self._models: Dict[Tuple[str, str], BinaryEdgeModel] = dict(models or {})
+        self._models: Dict[Tuple[str, str],
+                           BinaryEdgeModel] = dict(models or {})
 
     def ensure_edge_model(self, spec: BinaryEdgeSpec) -> BinaryEdgeModel:
         k = spec.key
@@ -345,9 +347,16 @@ def binary_edge_factory(
     estimator: Optional[
         Union[Type[Any], Callable[[BinaryEdgeSpec], Any], Any]
     ] = None,
+    text_vectorizer: str = "tfidf",
 ) -> BinaryEdgeFactory:
     """
-    Build ``Pipeline(TfidfVectorizer, classifier)`` wrappers for each edge.
+    Build ``Pipeline(vectorizer, classifier)`` wrappers for each edge.
+
+    **text_vectorizer** (first step):
+
+    - ``"tfidf"`` — :class:`~sklearn.feature_extraction.text.TfidfVectorizer` with IDF (default).
+    - ``"tf_l2"`` — ``TfidfVectorizer(use_idf=False)`` (TF with L2 norm; no IDF).
+    - ``"count"`` — :class:`~sklearn.feature_extraction.text.CountVectorizer` (shared keys only).
 
     **estimator** (how to pick the classifier):
 
@@ -379,23 +388,151 @@ def binary_edge_factory(
             return estimator(spec)
         return clone(estimator)
 
-    def _factory(spec: BinaryEdgeSpec) -> BinaryEdgeModel:
-        from sklearn.feature_extraction.text import TfidfVectorizer
-        from sklearn.pipeline import Pipeline
+    def _vectorizer_step():
+        from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 
         tkw = dict(min_df=2, max_features=30_000)
         if tfidf_kw:
             tkw.update(tfidf_kw)
+        mode = (text_vectorizer or "tfidf").lower().strip()
+        if mode == "tfidf":
+            return TfidfVectorizer(**tkw)
+        if mode in ("tf_l2", "tf", "tf_only"):
+            t2 = dict(tkw)
+            t2["use_idf"] = False
+            return TfidfVectorizer(**t2)
+        if mode == "count":
+            cv_allowed = {
+                "analyzer",
+                "binary",
+                "decode_error",
+                "dtype",
+                "encoding",
+                "input",
+                "lowercase",
+                "max_df",
+                "max_features",
+                "min_df",
+                "ngram_range",
+                "preprocessor",
+                "stop_words",
+                "strip_accents",
+                "token_pattern",
+                "tokenizer",
+                "vocabulary",
+            }
+            cv_kw = {k: v for k, v in tkw.items() if k in cv_allowed}
+            return CountVectorizer(**cv_kw)
+        raise ValueError(
+            "text_vectorizer must be 'tfidf', 'tf_l2', or 'count', "
+            f"got {text_vectorizer!r}"
+        )
+
+    def _factory(spec: BinaryEdgeSpec) -> BinaryEdgeModel:
+        from sklearn.pipeline import Pipeline
+
+        vec_step = _vectorizer_step()
         clf_step = _make_classifier_step(spec)
+        pipe = Pipeline([("vect", vec_step), ("clf", clf_step)])
+        return SklearnBinaryEdgeNode(pipe)
+
+    return _factory
+
+
+def svm_linear_binary_edge_factory(
+    *,
+    max_features: int = 8000,
+    text_vectorizer: str = "tfidf",
+    svm_kw: Optional[Dict[str, Any]] = None,
+    vectorizer_kw: Optional[Dict[str, Any]] = None,
+) -> BinaryEdgeFactory:
+    """
+    :class:`~sklearn.svm.LinearSVC` with TF-IDF, TF (no IDF), or count features.
+
+    ``text_vectorizer``: ``tfidf`` | ``tf_l2`` | ``count`` (see :func:`binary_edge_factory`).
+    """
+    from sklearn.svm import LinearSVC
+
+    tkw = dict(min_df=2, max_features=max_features)
+    if vectorizer_kw:
+        tkw.update(vectorizer_kw)
+    skw: Dict[str, Any] = dict(C=1.0, dual=False, max_iter=8000)
+    if svm_kw:
+        skw.update(svm_kw)
+    return binary_edge_factory(
+        tfidf_kw=tkw,
+        estimator=LinearSVC,
+        clf_kw=skw,
+        text_vectorizer=text_vectorizer,
+    )
+
+
+def svm_tfidf_truncated_svd_linear_edge_factory(
+    *,
+    max_features: int = 8000,
+    n_components: int = 500,
+    random_state: int = 42,
+    svm_kw: Optional[Dict[str, Any]] = None,
+    vectorizer_kw: Optional[Dict[str, Any]] = None,
+) -> BinaryEdgeFactory:
+    """
+    ``TfidfVectorizer`` → ``TruncatedSVD`` → ``LinearSVC`` (LSI-style reduction per edge).
+    """
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.pipeline import Pipeline
+    from sklearn.svm import LinearSVC
+
+    tkw = dict(min_df=2, max_features=max_features)
+    if vectorizer_kw:
+        tkw.update(vectorizer_kw)
+    skw: Dict[str, Any] = dict(C=1.0, dual=False, max_iter=8000)
+    if svm_kw:
+        skw.update(svm_kw)
+
+    def _factory(spec: BinaryEdgeSpec) -> BinaryEdgeModel:
         pipe = Pipeline(
             [
                 ("tfidf", TfidfVectorizer(**tkw)),
-                ("clf", clf_step),
+                (
+                    "svd",
+                    TruncatedSVD(
+                        n_components=n_components, random_state=random_state
+                    ),
+                ),
+                ("clf", LinearSVC(**skw)),
             ]
         )
         return SklearnBinaryEdgeNode(pipe)
 
     return _factory
+
+
+def linear_svc_estimator_by_depth(
+    c_by_depth: Dict[int, float],
+    *,
+    default_c: float = 1.0,
+    dual: bool = False,
+    max_iter: int = 8000,
+    class_weight: Optional[str] = None,
+) -> Callable[[BinaryEdgeSpec], Any]:
+    """
+    Build a callable ``estimator(spec)`` for :func:`binary_edge_factory` that sets
+    ``LinearSVC(C=...)`` from ``spec.depth`` (parent depth from ``Root``).
+    """
+
+    def _estimator(spec: BinaryEdgeSpec) -> Any:
+        from sklearn.svm import LinearSVC
+
+        c = float(c_by_depth.get(spec.depth, default_c))
+        kw: Dict[str, Any] = dict(
+            C=c, dual=dual, max_iter=max_iter, random_state=42
+        )
+        if class_weight is not None:
+            kw["class_weight"] = class_weight
+        return LinearSVC(**kw)
+
+    return _estimator
 
 
 class SklearnMulticlassNode(NodeDecisionModelBase):
