@@ -31,7 +31,7 @@ except ImportError as e:
 from hierarchical_classifier import BinaryEdgeFactory, MultilabelHierarchyRouter, binary_edge_factory
 from hierarchical_evaluation import evaluate_binary_edges_from_parent
 from hierarchical_training_data import MultilabelBinaryPoolData
-from topic_hierarchy import TopicTree, binary_edge_specs
+from topic_hierarchy import BinaryEdgeSpec, TopicTree, binary_edge_specs
 
 
 def linear_model_factories(
@@ -170,6 +170,62 @@ def fit_all_binary_edges(
         print(
             f"Done fitting: {n_fit} edges trained, {n_skip} skipped (single class), "
             f"{len(specs)} total specs.",
+            flush=True,
+        )
+    return {
+        "n_specs": len(specs),
+        "n_fitted": n_fit,
+        "n_skipped_single_class_train": n_skip,
+    }
+
+
+def fit_binary_edges_subset(
+    router: MultilabelHierarchyRouter,
+    pool: MultilabelBinaryPoolData,
+    specs: Sequence[BinaryEdgeSpec],
+    *,
+    verbose: bool = True,
+    restrict_to_parent_subtree: bool = True,
+) -> Dict[str, int]:
+    """
+    Fit **only** the listed ``BinaryEdgeSpec`` edges: same TF-IDF + classifier behavior as
+    :func:`fit_all_binary_edges`, but restricted to ``specs``.
+
+    Skips an edge when the **training** pool has a single class for that edge.
+    """
+    n_fit = 0
+    n_skip = 0
+    for i, spec in enumerate(specs, start=1):
+        if verbose:
+            print(
+                f"[{i}/{len(specs)}] {spec.parent} → {spec.child}  (depth {spec.depth})",
+                flush=True,
+            )
+        Xtr, ytr = pool.binary_edge_dataset(
+            spec.parent,
+            spec.child,
+            "train",
+            restrict_to_parent_subtree=restrict_to_parent_subtree,
+        )
+        if len(set(ytr)) < 2:
+            n_skip += 1
+            if verbose:
+                print(
+                    f"    skip: need 2 classes in train (n={len(ytr)})",
+                    flush=True,
+                )
+            continue
+        router.fit_edge(spec.parent, spec.child, Xtr, ytr, depth=spec.depth)
+        n_fit += 1
+        if verbose:
+            print(
+                f"    fit: n={len(ytr)}  positives={int(sum(ytr))}",
+                flush=True,
+            )
+    if verbose:
+        print(
+            f"Done fitting subset: {n_fit} edges trained, {n_skip} skipped (single class), "
+            f"{len(specs)} specs in list.",
             flush=True,
         )
     return {
