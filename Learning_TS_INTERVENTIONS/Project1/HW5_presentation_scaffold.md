@@ -12,6 +12,9 @@ Use these as talking points; expand into full sentences for the 3–5 minute pre
   - After detrending (see below), we tested again (e.g. ADF on residuals) and treated the detrended series as stationary enough to model.
   - *Why:* AR/ARMA theory assumes stationarity; we checked rather than assumed.
 
+- **Linearity (implicit)**
+  - We implicitly assumed a **linear** relationship between the lagged values of the series (and between the series and the exogenous variable in ARX/ARMAX). The model class is linear in the lags.
+
 - **Model class**
   - We assumed the **detrended** series can be well approximated by an **AR**, **ARX**, or **ARMAX** process (linear, finite order).
   - This links to the course: housing prices (or their detrended version) modeled as ARMA/ARMAX with optional exogenous regressor (interest rate).
@@ -43,7 +46,6 @@ Use these as talking points; expand into full sentences for the 3–5 minute pre
   - **Differencing** (e.g. first difference): \( y_t - y_{t-1} \); removes stochastic trend / unit root.
   - **Higher-order differencing** if needed.
   - **Polynomial (quadratic, etc.) or spline trend** then subtract.
-  - **Filtering** (e.g. HP filter, band-pass) to separate trend from cycle.
 - **Which we’d choose in the future and why:**
   - **Linear OLS detrend:** Simple, interpretable (constant growth rate), easy to re-add trend for forecasts; good when trend looks roughly linear.
   - **Differencing:** Good when we suspect unit root (random walk); no need to estimate trend; we’d use it if ADF suggests I(1) and we care about growth rates.
@@ -55,7 +57,8 @@ Use these as talking points; expand into full sentences for the 3–5 minute pre
 
 - **Steps we’d take:**
   - **Explore:** Plot series, check for missing values, definition of “prediction” (level vs. change, horizon).
-  - **Stationarity:** Test (ADF/KPSS); if non-stationary, detrend or difference, then re-test.
+  - **Stationarity:** Run a stationarity test — focus on the **Augmented Dickey–Fuller (ADF)** test; if non-stationary, detrend or difference, then re-test.
+  - **Correlations and lag structure:** Run **basic correlations** (e.g. target vs. exogenous variable). From the course: look at **cross-correlation** between two signals (e.g. house price and interest rate), or the **power spectrum** / cross-spectrum, to see **which lags are meaningful**. Test the **statistical significance of lags** — correlations can be statistically tested, not just inspected for size, to see if a relationship is truly significant.
   - **Model class:** Start with AR (ACF/PACF), then ARMA/ARMAX if we have candidate exogenous variables.
   - **Order selection:** AIC/BIC and/or out-of-sample MSE (e.g. rolling one-step-ahead).
   - **Evaluate:** Hold out a test period; report MSE, RMSE, or MAE; compare models (e.g. AR vs ARX).
@@ -71,15 +74,14 @@ Use these as talking points; expand into full sentences for the 3–5 minute pre
 
 ## 4. Evaluation metrics
 
-- **Prediction accuracy (point forecasts):**
+- **Prediction accuracy (point forecasts):** Focus on **MSE**, **RMSE**, and **MAE**.
   - **MSE** (mean squared error) — what we used; penalizes large errors more.
   - **RMSE** — same scale as the variable; easier to interpret.
   - **MAE** (mean absolute error) — robust to outliers.
-- **Model fit / model selection:**
-  - **AIC, BIC** — balance fit and complexity; used for choosing \(p\), \(q\) (and we compared in-sample MSE across orders).
+- **Model fit / model selection:** **AIC** and **BIC** are very useful — they balance fit and complexity and are used for choosing \(p\), \(q\) (we compared in-sample MSE and AIC/BIC across orders).
 - **How we used them:**
-  - In-sample: MSE (and AIC/BIC) for AR order selection; same for ARX/ARMAX.
-  - Out-of-sample: **MSE on held-out test period** with short-term (one-step-ahead, rolling refit) strategy to compare AR vs ARX vs ARMAX.
+  - In-sample: MSE and **AIC/BIC** for AR (and ARX/ARMAX) order selection.
+  - Out-of-sample: **MSE** (or RMSE/MAE) on held-out test period with short-term (one-step-ahead, rolling refit) strategy to compare AR vs ARX vs ARMAX.
 
 ---
 

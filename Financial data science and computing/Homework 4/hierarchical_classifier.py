@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import pickle
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Type, Union
 
 try:
@@ -319,6 +320,93 @@ class MultilabelHierarchyRouter:
         r = self.predict_reached_nodes(x)
         leaves = self.tree.leaf_nodes()
         return r & leaves
+
+
+def save_multilabel_router(router: MultilabelHierarchyRouter, out_dir: Union[str, Path]) -> None:
+    """
+    Persist a fitted :class:`MultilabelHierarchyRouter` (tree + all binary edge models).
+
+    Writes ``tree_meta.pkl`` and ``edge_models.pkl`` under ``out_dir``. Reload with
+    :func:`load_multilabel_router` (pass a stub or real ``model_factory`` — unused if every
+    edge is present in the pickle).
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    meta = {
+        "traversal_root": router.tree.traversal_root,
+        "children": router.tree.children,
+        "parent": router.tree.parent,
+    }
+    with open(out / "tree_meta.pkl", "wb") as f:
+        pickle.dump(meta, f)
+    with open(out / "edge_models.pkl", "wb") as f:
+        pickle.dump(router._models, f)
+
+
+def load_multilabel_router(
+    out_dir: Union[str, Path],
+    model_factory: Optional[BinaryEdgeFactory] = None,
+) -> MultilabelHierarchyRouter:
+    """
+    Load a router saved by :func:`save_multilabel_router`.
+
+    ``model_factory`` is only used if the router must allocate a **new** edge at runtime; for
+    pure inference on the saved edges, pass ``None`` (a stub factory that raises is installed).
+    """
+    out = Path(out_dir)
+
+    def _stub(spec: BinaryEdgeSpec) -> BinaryEdgeModel:
+        raise RuntimeError(
+            f"No saved model for edge {spec.parent!r} → {spec.child!r}; "
+            "pass model_factory=... matching training if you extend the taxonomy."
+        )
+
+    factory = model_factory if model_factory is not None else _stub
+    with open(out / "tree_meta.pkl", "rb") as f:
+        meta = pickle.load(f)
+    with open(out / "edge_models.pkl", "rb") as f:
+        models = pickle.load(f)
+    tree_loaded = TopicTree(
+        children=meta["children"],
+        parent=meta["parent"],
+        traversal_root=meta["traversal_root"],
+    )
+    return MultilabelHierarchyRouter(tree_loaded, factory, models=models)
+
+
+def predict_reached_leaves_batch(
+    router: MultilabelHierarchyRouter,
+    texts: Sequence[str],
+) -> List[Set[str]]:
+    """Run :meth:`MultilabelHierarchyRouter.predict_reached_leaves` on many documents."""
+    return [router.predict_reached_leaves(t) for t in texts]
+
+
+def apply_router_to_dataframe(
+    router: MultilabelHierarchyRouter,
+    df: Any,
+    *,
+    text_column: str = "article",
+    leaves_sep: str = ";",
+) -> Any:
+    """
+    Predict reached **leaf** topic codes for each row; returns a copy of ``df`` with
+    ``predicted_leaves`` (sorted, ``leaves_sep``-joined string) and ``n_predicted_leaves``.
+
+    ``df`` must be a :class:`pandas.DataFrame` with a text column. Requires pandas.
+    """
+    import pandas as pd
+
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("df must be a pandas.DataFrame")
+    out = df.copy()
+    texts = out[text_column].astype(str).tolist()
+    batch = predict_reached_leaves_batch(router, texts)
+    out["predicted_leaves"] = [
+        leaves_sep.join(sorted(s)) for s in batch
+    ]
+    out["n_predicted_leaves"] = [len(s) for s in batch]
+    return out
 
 
 class SklearnBinaryEdgeNode(BinaryEdgeModelBase):

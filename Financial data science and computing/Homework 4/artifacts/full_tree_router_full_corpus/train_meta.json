@@ -1,0 +1,28 @@
+{
+  "base_path": "/Users/nikhileshbelulkar/Documents/HW-Spring-2026/Financial data science and computing/Homework 4",
+  "depth_c_map": {
+    "0": 0.1,
+    "1": 10.0,
+    "2": 10.0,
+    "3": 10.0
+  },
+  "default_c": 1.0,
+  "max_features": 8000,
+  "restrict_to_parent_subtree": true,
+  "train_n": 413765,
+  "test_n": 0,
+  "corpus_prep": {
+    "base_path": "/Users/nikhileshbelulkar/Documents/HW-Spring-2026/Financial data science and computing/Homework 4",
+    "articles_merged": "/Users/nikhileshbelulkar/Documents/HW-Spring-2026/Financial data science and computing/Homework 4/artifacts/full_corpus_build/articles_merged.csv",
+    "train_ids": "/Users/nikhileshbelulkar/Documents/HW-Spring-2026/Financial data science and computing/Homework 4/artifacts/full_corpus_build/full_corpus_train_ids.csv",
+    "test_ids": null,
+    "pool_train_ids": "union",
+    "n_train_ids": 413765,
+    "n_news_ids": 23149,
+    "n_test_ids": 390616,
+    "n_train_article_rows": 23149,
+    "n_test_article_rows": 390616,
+    "news_csv": "/Users/nikhileshbelulkar/Documents/HW-Spring-2026/Financial data science and computing/Homework 4/news.csv",
+    "news_test_csv": "/Users/nikhileshbelulkar/Documents/HW-Spring-2026/Financial data science and computing/Homework 4/news_test.csv"
+  }
+}

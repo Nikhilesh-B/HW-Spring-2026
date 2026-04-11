@@ -11,6 +11,11 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+try:
+    from typing import Literal
+except ImportError:  # Python < 3.8
+    from typing_extensions import Literal
+
 import pandas as pd
 
 from topic_hierarchy import TopicTree, load_topic_tree
@@ -316,6 +321,323 @@ def make_multilabel_binary_pool_data(
         lp.train_ids(),
         lp.test_ids(),
     )
+
+
+def make_multilabel_binary_pool_data_from_files(
+    *,
+    base_path: Optional[str] = None,
+    articles_csv: str,
+    train_ids_csv: str,
+    test_ids_csv: Optional[str] = None,
+    news_topics_csv: Optional[str] = None,
+    topics_csv: Optional[str] = None,
+    traversal_root: str = "Root",
+    article_column: str = "article",
+) -> MultilabelBinaryPoolData:
+    """
+    Build :class:`MultilabelBinaryPoolData` for **large** pools (e.g. ~400k train rows).
+
+    Same labeling logic as :func:`make_multilabel_binary_pool_data`, but you pass explicit paths:
+
+    - ``articles_csv`` — must contain at least ``id`` and ``article`` (or ``article_column``).
+    - ``train_ids_csv`` — one column ``id`` (or first column) listing training article ids.
+    - ``test_ids_csv`` — optional; omit or pass ``None`` for **train-only** (empty test split).
+    - ``news_topics_csv`` — defaults to ``<base_path>/news_topics.csv`` (chunked read).
+    - ``topics_csv`` — defaults to ``<base_path>/topics.csv``.
+
+    Only rows whose ``id`` appears in train ∪ test are kept in the in-memory articles table
+    (saves RAM when the articles file is a superset).
+
+    Example::
+
+        pool = make_multilabel_binary_pool_data_from_files(
+            base_path=\"/data/rcv1\",
+            articles_csv=\"/data/rcv1/articles_full.csv\",
+            train_ids_csv=\"/data/rcv1/train_ids.csv\",
+            test_ids_csv=\"/data/rcv1/test_ids.csv\",  # or None
+        )
+    """
+    root = base_path or _base_dir()
+    tpath = topics_csv or os.path.join(root, "topics.csv")
+    tree = load_topic_tree(tpath, traversal_root=traversal_root)
+    nt_path = news_topics_csv or os.path.join(root, "news_topics.csv")
+
+    train_ids = load_pool_ids(train_ids_csv)
+    test_ids = load_pool_ids(test_ids_csv) if test_ids_csv else []
+    pool_ids = set(train_ids) | set(test_ids)
+    labels = load_article_label_sets(nt_path, pool_ids)
+
+    usecols = [article_column, "id"]
+    articles = pd.read_csv(articles_csv, usecols=lambda c: c in set(usecols))
+    articles["id"] = articles["id"].astype(int)
+    articles = articles.drop_duplicates(subset=["id"], keep="first")
+    articles = articles[articles["id"].isin(pool_ids)].copy()
+    missing = pool_ids - set(articles["id"].tolist())
+    if missing:
+        raise ValueError(
+            f"articles_csv is missing {len(missing)} ids present in train/test "
+            f"(e.g. {next(iter(missing))})"
+        )
+
+    return MultilabelBinaryPoolData(
+        tree,
+        labels,
+        articles,
+        train_ids,
+        test_ids,
+    )
+
+
+def prepare_news_split_corpus_bundle(
+    *,
+    base_path: str,
+    output_dir: str,
+    news_csv: Optional[str] = None,
+    news_test_csv: Optional[str] = None,
+    article_column: str = "article",
+    merged_filename: str = "articles_merged.csv",
+    train_ids_filename: str = "full_corpus_train_ids.csv",
+    test_ids_filename: str = "full_corpus_test_ids.csv",
+    chunksize: int = 200_000,
+    exclude_test_ids_already_in_train: bool = True,
+    pool_train_ids: Literal["union", "news_only"] = "union",
+) -> Dict[str, Any]:
+    """
+    Build training-ready artifacts from the standard **split** layout (``news.csv`` + optional
+    ``news_test.csv``), each with columns ``id`` and ``article`` (or ``article_column``).
+
+    Writes under ``output_dir``:
+
+    - **Merged articles** CSV: all training rows first, then test rows (streaming; low peak RAM).
+    - **Id CSVs** for :func:`make_multilabel_binary_pool_data_from_files`:
+
+      - **Default** (``pool_train_ids="union"``): ``full_corpus_train_ids.csv`` lists **every**
+        unique id present in the merged file (``news`` ∪ ``news_test`` after overlap handling), and
+        no separate test-id file is written — so edge training uses **both** splits.
+      - **Legacy** (``pool_train_ids="news_only"``): train-id file = ids from ``news.csv`` only;
+        test-id file = ids from ``news_test.csv`` (fit uses train split only; test split reserved
+        for evaluation).
+
+    If ``news_test_csv`` is omitted, looks for ``<base_path>/news_test.csv``; if that file is
+    absent, only the training file is used (empty test split).
+
+    When ``exclude_test_ids_already_in_train`` is True, rows whose ``id`` already appeared in
+    ``news.csv`` are dropped from the merged output and from the test-id list (RCV1-style splits
+    are usually disjoint).
+
+    Returns a dict with absolute paths: ``articles_merged``, ``train_ids``, ``test_ids`` (path or
+    ``None``), counts, etc.
+    """
+    root = os.path.abspath(base_path)
+    out_abs = os.path.abspath(output_dir)
+    os.makedirs(out_abs, exist_ok=True)
+
+    n_path = news_csv or os.path.join(root, "news.csv")
+    if not os.path.isfile(n_path):
+        raise FileNotFoundError(f"Training articles CSV not found: {n_path}")
+
+    if news_test_csv is not None:
+        te_path = os.path.abspath(news_test_csv)
+        if not os.path.isfile(te_path):
+            raise FileNotFoundError(f"news_test_csv not found: {te_path}")
+        use_test = True
+    else:
+        te_path = os.path.join(root, "news_test.csv")
+        use_test = os.path.isfile(te_path)
+
+    merged_path = os.path.join(out_abs, merged_filename)
+    train_ids_path = os.path.join(out_abs, train_ids_filename)
+    test_ids_path_default = os.path.join(out_abs, test_ids_filename)
+
+    usecols = ["id", article_column]
+    train_ids_accum: Set[int] = set()
+    first_write = True
+    n_train_rows = 0
+
+    for chunk in pd.read_csv(
+        n_path,
+        usecols=lambda c: c in set(usecols),
+        chunksize=chunksize,
+    ):
+        if article_column not in chunk.columns or "id" not in chunk.columns:
+            raise ValueError(
+                f"{n_path} must contain columns 'id' and {article_column!r}; got {list(chunk.columns)}"
+            )
+        chunk = chunk.copy()
+        chunk["id"] = chunk["id"].astype(int)
+        train_ids_accum.update(chunk["id"].tolist())
+        chunk.to_csv(
+            merged_path,
+            mode="w" if first_write else "a",
+            header=first_write,
+            index=False,
+        )
+        first_write = False
+        n_train_rows += len(chunk)
+
+    n_test_rows = 0
+    test_ids_accum: Set[int] = set()
+    if use_test:
+        train_id_frozen = set(train_ids_accum)
+        for chunk in pd.read_csv(
+            te_path,
+            usecols=lambda c: c in set(usecols),
+            chunksize=chunksize,
+        ):
+            chunk = chunk.copy()
+            chunk["id"] = chunk["id"].astype(int)
+            if exclude_test_ids_already_in_train:
+                chunk = chunk.loc[~chunk["id"].isin(train_id_frozen)]
+            if chunk.empty:
+                continue
+            test_ids_accum.update(chunk["id"].tolist())
+            chunk.to_csv(merged_path, mode="a", header=False, index=False)
+            n_test_rows += len(chunk)
+
+    out_test_ids_path: Optional[str] = None
+    if not use_test:
+        fit_ids = sorted(train_ids_accum)
+        pd.DataFrame({"id": fit_ids}).to_csv(train_ids_path, index=False)
+        n_fit_ids = len(fit_ids)
+    elif pool_train_ids == "union":
+        fit_ids = sorted(train_ids_accum | test_ids_accum)
+        pd.DataFrame({"id": fit_ids}).to_csv(train_ids_path, index=False)
+        n_fit_ids = len(fit_ids)
+    else:
+        pd.DataFrame({"id": sorted(train_ids_accum)}).to_csv(train_ids_path, index=False)
+        pd.DataFrame({"id": sorted(test_ids_accum)}).to_csv(test_ids_path_default, index=False)
+        out_test_ids_path = test_ids_path_default
+        n_fit_ids = len(train_ids_accum)
+
+    return {
+        "base_path": root,
+        "articles_merged": merged_path,
+        "train_ids": train_ids_path,
+        "test_ids": out_test_ids_path,
+        "pool_train_ids": pool_train_ids,
+        "n_train_ids": n_fit_ids,
+        "n_news_ids": len(train_ids_accum),
+        "n_test_ids": len(test_ids_accum),
+        "n_train_article_rows": n_train_rows,
+        "n_test_article_rows": n_test_rows,
+        "news_csv": os.path.abspath(n_path),
+        "news_test_csv": os.path.abspath(te_path) if use_test else None,
+    }
+
+
+def validate_router_training_inputs(
+    *,
+    base_path: Optional[str] = None,
+    articles_csv: str,
+    train_ids_csv: str,
+    test_ids_csv: Optional[str] = None,
+    news_topics_csv: Optional[str] = None,
+    topics_csv: Optional[str] = None,
+    article_column: str = "article",
+    traversal_root: str = "Root",
+    articles_id_chunksize: int = 400_000,
+) -> Tuple[bool, List[str]]:
+    """
+    Check files and coverage before ``make_multilabel_binary_pool_data_from_files`` / CLI ``train``.
+
+    Returns ``(ok, lines)`` where ``lines`` are human-readable messages (errors and warnings).
+    Scans ``articles_csv`` **id** column in chunks (full pass) to verify every pool id exists.
+    Loads labels via chunked ``news_topics`` read (same as training).
+    """
+    lines: List[str] = []
+    root = base_path or _base_dir()
+    tpath = topics_csv or os.path.join(root, "topics.csv")
+    nt_path = news_topics_csv or os.path.join(root, "news_topics.csv")
+
+    if not os.path.isfile(tpath):
+        lines.append(f"ERROR: topics.csv not found: {tpath}")
+        return False, lines
+    if not os.path.isfile(nt_path):
+        lines.append(f"ERROR: news_topics.csv not found: {nt_path}")
+        return False, lines
+    if not os.path.isfile(articles_csv):
+        lines.append(f"ERROR: articles_csv not found: {articles_csv}")
+        return False, lines
+    if not os.path.isfile(train_ids_csv):
+        lines.append(f"ERROR: train_ids_csv not found: {train_ids_csv}")
+        return False, lines
+    if test_ids_csv and not os.path.isfile(test_ids_csv):
+        lines.append(f"ERROR: test_ids_csv not found: {test_ids_csv}")
+        return False, lines
+
+    try:
+        tree = load_topic_tree(tpath, traversal_root=traversal_root)
+        lines.append(f"OK: loaded TopicTree (root={tree.traversal_root!r})")
+    except Exception as e:
+        lines.append(f"ERROR: failed to load topics: {e}")
+        return False, lines
+
+    try:
+        header = pd.read_csv(articles_csv, nrows=0)
+    except Exception as e:
+        lines.append(f"ERROR: cannot read articles_csv header: {e}")
+        return False, lines
+    if "id" not in header.columns:
+        lines.append("ERROR: articles_csv must have column 'id'")
+        return False, lines
+    if article_column not in header.columns:
+        lines.append(
+            f"ERROR: articles_csv missing text column {article_column!r}; have {list(header.columns)}"
+        )
+        return False, lines
+
+    train_ids = load_pool_ids(train_ids_csv)
+    test_ids = load_pool_ids(test_ids_csv) if test_ids_csv else []
+    if not train_ids:
+        lines.append("ERROR: train_ids_csv produced no ids")
+        return False, lines
+    pool_ids: Set[int] = set(int(x) for x in train_ids) | set(int(x) for x in test_ids)
+    lines.append(
+        f"OK: train_ids={len(train_ids)}  test_ids={len(test_ids)}  pool_union={len(pool_ids)}"
+    )
+
+    article_ids: Set[int] = set()
+    try:
+        for chunk in pd.read_csv(
+            articles_csv,
+            usecols=["id"],
+            chunksize=articles_id_chunksize,
+        ):
+            article_ids.update(chunk["id"].astype(int).tolist())
+    except Exception as e:
+        lines.append(f"ERROR: scanning articles_csv ids: {e}")
+        return False, lines
+
+    missing_art = pool_ids - article_ids
+    if missing_art:
+        sample = sorted(missing_art)[:5]
+        lines.append(
+            f"ERROR: {len(missing_art)} pool ids missing from articles_csv (e.g. {sample})"
+        )
+        return False, lines
+    lines.append(f"OK: all {len(pool_ids)} pool ids appear in articles_csv")
+
+    labels = load_article_label_sets(nt_path, pool_ids)
+    empty_lab = [i for i in pool_ids if not labels.get(i)]
+    if empty_lab:
+        lines.append(
+            f"WARNING: {len(empty_lab)} pool ids have no rows in news_topics (empty gold); "
+            f"e.g. {empty_lab[:5]}"
+        )
+    else:
+        lines.append(f"OK: news_topics has at least one label for all {len(pool_ids)} pool ids")
+
+    dup_note = ""
+    try:
+        id_series = pd.read_csv(articles_csv, usecols=["id"])["id"].astype(int)
+        nd = int(id_series.duplicated().sum())
+        if nd:
+            dup_note = f" (note: {nd} duplicate id rows; training uses first per id)"
+    except Exception:
+        pass
+    lines.append(f"Validation finished.{dup_note}")
+    ok = not missing_art
+    return ok, lines
 
 
 def make_leaf_pool_data(

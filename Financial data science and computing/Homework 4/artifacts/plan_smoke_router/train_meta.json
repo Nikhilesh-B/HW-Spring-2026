@@ -1,0 +1,17 @@
+{
+  "base_path": "/Users/nikhileshbelulkar/Documents/HW-Spring-2026/Financial data science and computing/Homework 4",
+  "articles_csv": "/Users/nikhileshbelulkar/Documents/HW-Spring-2026/Financial data science and computing/Homework 4/articles_leaf_min60_cap200.csv",
+  "train_ids_csv": "/Users/nikhileshbelulkar/Documents/HW-Spring-2026/Financial data science and computing/Homework 4/articles_leaf_min60_cap200_train_ids.csv",
+  "test_ids_csv": "/Users/nikhileshbelulkar/Documents/HW-Spring-2026/Financial data science and computing/Homework 4/articles_leaf_min60_cap200_test_ids.csv",
+  "depth_c_map": {
+    "0": 0.1,
+    "1": 10.0,
+    "2": 10.0,
+    "3": 10.0
+  },
+  "default_c": 1.0,
+  "max_features": 8000,
+  "restrict_to_parent_subtree": true,
+  "train_n": 14465,
+  "test_n": 3617
+}
