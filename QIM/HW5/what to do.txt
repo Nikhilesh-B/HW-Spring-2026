@@ -1,0 +1,19 @@
+How you represent tin terms of your beta estimates and that your and the correaltions from your factor expsorures and the factor covariance matreix (and think about it)
+
+How would you do it and returns (and get the uncertainity of missing data) << and check your uncertainity and see how it is done. 
+How to deal 
+
+Tracing the uncertainity through it to do it and what.
+
+Error is an error maximizer (you can't) => correlation which was mis-estimated. 
+
+Optimization is very sensitive to the inputs; => errors in the inputs and take them to the extreme => covariance matrix shrinkage (Ledoit-Wolf shrinkage)
+
+Take your inputs and random noise and see what it outputs => (use that and see that as a tool to use a tool to input it)
+
+=> see what it inputs and things and it could different (and see the differences)
+
+Robustness of estimation => if i have all these parameters at think of they are not on overfit to see how things
+
+Time series regression => to see how your factors are exposed and to => ; 
+

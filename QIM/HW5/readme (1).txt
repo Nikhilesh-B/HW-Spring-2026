@@ -20,7 +20,7 @@ rf – risk free rate return if money invested at period t-1
 
 
 
-estimates.xlsx
+estimates.xlsx (expected returns jan 2041)
 mrap_id – identifier
 naics – North American Industry Classification System Code
 price – average of bid-ask price at close

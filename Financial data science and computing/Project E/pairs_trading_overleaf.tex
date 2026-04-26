@@ -1,0 +1,224 @@
+% =============================================================================
+% SINGLE FILE for Overleaf: copy everything below into main.tex (or this file
+% as the only .tex source), add images under figures/ if you use \includegraphics.
+% Compiler: pdfLaTeX (default).
+% =============================================================================
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,booktabs,graphicx}
+\usepackage[margin=1in]{geometry}
+
+% Replace placeholder boxes with screenshots: uncomment \includegraphics in
+% \PairsTradingFigurePlaceholder and optionally remove the \fbox{...} block.
+\newcommand{\PairsTradingFigurePlaceholder}[4]{%
+  \begin{figure}[htbp]%
+    \centering%
+    \fbox{\begin{minipage}{0.92\textwidth}%
+      \centering\vspace*{18mm}%
+      {\itshape #3\par}%
+      \vspace*{18mm}%
+    \end{minipage}}%
+    % \includegraphics[width=0.92\textwidth]{#2}%
+    \caption{#4}%
+    \label{#1}%
+  \end{figure}%
+}
+
+\begin{document}
+
+\section{Pairs trading analysis (Project E, Part 2)}
+\label{sec:pairs-trading-project-e}
+
+\subsection{Purpose and methods}
+\label{subsec:pairs-purpose}
+
+This section analyzes five pairs of related indices and tradable assets using Bloomberg data (approximately 2019--2025). For each pair the notebook produces: a scatterplot of daily returns with an OLS trend line (Newey--West standard errors), regression and tracking statistics, and outlier detection on the return spread. Below, narrative discussion and Bloomberg liquidity inputs are reproduced; scatterplots should be inserted from notebook exports or screenshots where indicated.
+
+\subsection{Instrument overview}
+\label{subsec:pairs-instruments}
+
+Before the return analysis, the following pairs are compared in terms of the \emph{tradable} leg versus the \emph{reference} leg, financing, and main economic differences.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Five pairs: tradable vs.\ reference leg (summary).}
+  \label{tab:pairs-overview}
+  \small
+  \begin{tabular}{@{}p{0.22\textwidth} p{0.22\textwidth} p{0.20\textwidth} p{0.30\textwidth}@{}}
+    \toprule
+    \textbf{Pair} & \textbf{Tradable leg} & \textbf{Reference leg} & \textbf{Main difference / margin} \\
+    \midrule
+    ES1 vs.\ SPX &
+    ES1 = generic front-month E-mini S\&P 500 future &
+    SPX = cash index &
+    Future is tradable and must be rolled; SPX is not investable. Basis reflects cost-of-carry. Futures margin vs.\ no margin on the index itself. \\
+    \addlinespace
+    SPY vs.\ SPX &
+    SPY = SPDR S\&P 500 ETF &
+    SPX &
+    ETF wrapper vs.\ benchmark; fee, dividends, NAV mechanics. Standard equity margin on SPY. \\
+    \addlinespace
+    GLD vs.\ XAU &
+    GLD = SPDR Gold Shares &
+    XAU = spot gold reference &
+    ETF vs.\ spot; fees and fund structure. ETF margin treatment vs.\ spot gold. \\
+    \addlinespace
+    LMI3 vs.\ MSTR &
+    LMI3 = 3$\times$ long MicroStrategy daily ETP &
+    MSTR stock &
+    Daily leverage, compounding, ETP structure vs.\ equity; asymmetric frictions. \\
+    \addlinespace
+    WTI future vs.\ spot oil &
+    CL1 (front WTI) &
+    Spot / cash oil benchmark &
+    Futures vs.\ physical benchmark; storage, convenience yield, roll. Futures margin. \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Bloomberg liquidity and transaction-cost inputs}
+\label{subsec:bloomberg-liquidity}
+
+\textbf{Instructions (as in the project).} Pull bid, ask, and mid (or last) from Bloomberg for each tradable leg; figures below reflect a single snapshot on \textbf{20 April 2026} for directional comparison of spreads. Cash indices (SPX, BCSL0090) are not listed as executable prices.
+
+Spread in percent of mid is $(\mathrm{ask}-\mathrm{bid})/\mathrm{mid}$ with $\mathrm{mid}=(\mathrm{bid}+\mathrm{ask})/2$, with units matched to each quote (index points, USD, GBp, USD/bbl).
+
+\begin{table}[htbp]
+  \centering
+  \caption{Bloomberg liquidity snapshot (20 Apr 2026).}
+  \label{tab:liquidity}
+  \footnotesize
+  \begin{tabular}{@{}l r r r r r l@{}}
+    \toprule
+    \textbf{Instrument} & \textbf{Bid} & \textbf{Ask} & \textbf{Mid} & \textbf{Spread} & \textbf{Spread \% mid} & \textbf{As of} \\
+    \midrule
+    ES1 Index      & 7157.25 & 7157.50 & 7157.375 & 0.25 pts   & $\sim$0.0035\% & 20 Apr 2026 \\
+    SPY US Equity  & 708.69  & 708.72  & 708.705  & 0.03 USD   & $\sim$0.0042\% & 20 Apr 2026 \\
+    GLD US Equity  & 442.09  & 442.17  & 442.13   & 0.08 USD   & $\sim$0.018\%  & 20 Apr 2026 \\
+    XAU (BGN \$/oz) & 4832.03 & 4833.54 & 4832.79  & 1.51 USD   & $\sim$0.031\%  & 20 Apr 2026 \\
+    LMI3 LN Equity & 32.0 GBp & 34.0 GBp & 33.0 GBp & 2.0 GBp & $\sim$6.06\%   & 20 Apr 2026 \\
+    MSTR US Equity & 170.77  & 170.80  & 170.785  & 0.03 USD   & $\sim$0.018\%  & 20 Apr 2026 \\
+    CL1 Comdty     & 87.94   & 88.05   & 87.995   & 0.11 USD/bbl & $\sim$0.13\% & 20 Apr 2026 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Snapshot notes (Bloomberg DES / quote).}
+\textit{ES1:} E-mini S\&P 500 generic first future; $7157.25/7157.50$; inside depth $7\times8$ contracts; session volume and open interest per screenshot; tick $0.25$ index points (\$12.50/tick); \$50$\times$index notional per point.
+\textit{SPY:} Tight ETF quote; inside size in round lots; large session value traded.
+\textit{GLD / XAU:} GLD session value and depth on ETF; XAU spot USD/oz (no share count).
+\textit{LMI3:} Thin ETP-style quote vs.\ MSTR.
+\textit{CL1:} NYMEX WTI; 1000 bbl/contract; \$1000 P\&L per \$1.00/bbl; roll on expiration.
+
+\smallskip
+\noindent\textbf{Optional LMI3 fund fields (20 Apr 2026):} NAV $\sim$ USD 0.30; premium to NAV $\sim -11\%$; 1Y total return vs.\ index $\sim -98.54\%$.
+
+\subsection{Pair 1: S\&P 500 futures vs.\ spot (ES1 vs.\ SPX)}
+\label{subsec:pair1}
+
+\subsubsection*{Economic relationship}
+ES1 is the generic front-month S\&P 500 futures contract. By cost-of-carry, futures roughly satisfy $\text{futures} \approx \text{spot} \times e^{(r-d)T}$, so daily returns should track closely, with small deviations from the futures basis (interest rate minus dividend yield) and roll.
+
+\PairsTradingFigurePlaceholder{fig:pair1-scatter}{figures/pair1_es1_spx_scatter.png}{Insert screenshot or export: \texttt{Pair 1: ES1 Index vs.\ SPX Index --- Daily Returns} scatterplot with OLS line.}{ES1 vs.\ SPX: daily return scatter (OLS). See notebook output for Pair~1.}
+
+\subsubsection*{Discussion}
+
+\textbf{How well do the returns track?}
+The returns track very closely with a beta near one and $R^2$ around $0.95$.
+
+\textbf{Notable outliers.}
+Outliers concentrate in volatile periods (e.g.\ COVID-19 March 2020 with very large standard-deviation moves) and other stress windows; behavior can differ between how single stocks trade vs.\ the front future.
+
+\textbf{Pairs trading opportunity?}
+There is not a compelling \emph{true} arbitrage in the naive sense: the tight relationship reflects cost-of-carry. Taking the ``spot'' side against the future requires either replicating many index constituents (meaningful cumulative slippage) or using packaged exposure such as SPY---which shifts economics toward Pair~2. For ES1 vs.\ published SPX alone, implementation frictions undermine a clean two-asset arbitrage for most investors.
+
+\textbf{Transaction costs (Bloomberg).}
+Section~\ref{subsec:bloomberg-liquidity}: ES1 $\sim 0.25$ index points wide on $\sim 7157$ ($\sim 0.0035\%$ of mid). SPX is not tradable; compare ES1 frictions to replication or ETF implementation costs.
+
+\subsection{Pair 2: S\&P 500 ETF vs.\ spot (SPY vs.\ SPX)}
+\label{subsec:pair2}
+
+\subsubsection*{Economic relationship}
+SPY is designed to track SPX. Returns should be nearly identical, with tiny deviations from expense ratio ($\sim$9~bps/yr), creation/redemption premia/discounts to NAV, and dividend timing.
+
+\PairsTradingFigurePlaceholder{fig:pair2-scatter}{figures/pair2_spy_spx_scatter.png}{Insert screenshot or export: \texttt{Pair 2: SPY US Equity vs.\ SPX Index --- Daily Returns} scatterplot.}{SPY vs.\ SPX: daily return scatter.}
+
+\subsubsection*{Discussion}
+
+\textbf{How well do the returns track?}
+Very tightly: beta $\approx 1.003$, $R^2 \approx 0.995$, correlation $\approx 0.998$; tracking error on the order of 8--9~bps (std.\ of spread).
+
+\textbf{Notable outliers.}
+Concentrated in March 2020 (COVID); also many dates near quarterly option expirations (third Friday of Mar/Jun/Sep/Dec) when flows can separate ETF from index briefly.
+
+\textbf{Pairs trading opportunity?}
+Unlike Pair~1, the structure is closer to classic index--ETF arbitrage: SPY is one liquid ticker embedding the basket, and authorized participants use creation/redemption so marginal costs pin price to NAV. Dislocations for outsiders are small and short-lived; expense ratio and dividend timing remain second-order differences.
+
+\textbf{Transaction costs (Bloomberg).}
+See SPY row in Table~\ref{tab:liquidity} and snapshot notes (session size and value traded): $\sim\$0.03$ wide on $\sim\$709$, $\sim 0.004\%$ of mid on the snapshot date.
+
+\subsection{Pair 3: Gold ETF vs.\ spot gold (GLD vs.\ XAU)}
+\label{subsec:pair3}
+
+\subsubsection*{Economic relationship}
+GLD holds physical bullion; its price should track about one-tenth of spot gold per share design. Returns should correlate closely, with deviations from expense ratio ($\sim$40~bps/yr), bid--ask, and London fix vs.\ US equity close timing.
+
+\PairsTradingFigurePlaceholder{fig:pair3-scatter}{figures/pair3_gld_xau_scatter.png}{Insert screenshot or export: \texttt{Pair 3: GLD vs.\ XAU --- Daily Returns} scatterplot.}{GLD vs.\ XAU: daily return scatter.}
+
+\subsubsection*{Discussion}
+
+\textbf{How well do the returns track?}
+Correlation $\approx 0.984$, beta $\approx 0.974$, $R^2 \approx 0.968$---still very tight, slightly below SPY/SPX. Much of the gap is timezone and closing-time mismatch (London fix vs.\ US close).
+
+\textbf{Notable outliers.}
+Clusters in March 2020 and in 2025 volatility; some dates align with US holidays when GLD is flat but gold continues elsewhere (mechanical calendar effects).
+
+\textbf{Pairs trading opportunity?}
+Physically backed ETF vs.\ spot is more ``arbitrage-adjacent'' than a pure statistical pair: deviations may mean-revert if round-trip costs are smaller than typical spread moves. Compare Table~\ref{tab:liquidity} bid--ask and snapshot depth to typical regression residuals: if execution costs dominate mean reversion, there is no net arbitrage after frictions.
+
+\textbf{Liquidity snapshot (same table).}
+GLD $442.09/442.17$ ($\sim\$0.08$, $\sim 0.018\%$ of mid); XAU $4832.03/4833.54$ ($\sim\$1.51$, $\sim 0.03\%$ of mid); both far tighter in spread \% than thin ETPs such as LMI3 (Pair~4).
+
+\subsection{Pair 4: 3$\times$ MicroStrategy ETP vs.\ stock (LMI3 vs.\ MSTR)}
+\label{subsec:pair4}
+
+\subsubsection*{Economic relationship}
+LMI3 targets $3\times$ the \emph{daily} return of MSTR; multi-day paths diverge via compounding and volatility drag. LMI3 lists later, trades LSE vs.\ NASDAQ on MSTR, so calendars and closes differ.
+
+\PairsTradingFigurePlaceholder{fig:pair4-scatter}{figures/pair4_mstr_lmi3_scatter.png}{Insert screenshot or export: \texttt{Pair 4: MSTR vs.\ LMI3 --- Daily Returns} scatterplot.}{MSTR vs.\ LMI3: daily return scatter.}
+
+\subsubsection*{Discussion}
+
+\textbf{How well do the returns track?}
+Over roughly 844 overlapping days (Oct~2022--Dec~2025), OLS of LMI3 on MSTR yields $\beta \approx 1.83$, well below the nominal $3\times$ daily factor; $R^2 \approx 0.40$. Tracking error is large vs.\ index pairs. Swap fees, rebalancing, and non-overlapping London/US closes break a textbook hedge.
+
+\textbf{Notable outliers.}
+Extreme spread days when MSTR moves moderately but LMI3 moves far more (or even opposite sign) owing to ETP mechanics and NAV/premium.
+
+\textbf{Pairs trading opportunity?}
+Bloomberg rows show highly asymmetric liquidity: LMI3 quoted very wide (e.g.\ $\sim 6\%$ of mid one-way on the snapshot) vs.\ tight MSTR. This is a noisy statistical relation, not a risk-free convergence trade.
+
+\subsection{Pair 5: WTI future vs.\ spot oil (CL1 vs.\ BCSL0090)}
+\label{subsec:pair5}
+
+\subsubsection*{Economic relationship}
+CL1 is Bloomberg's generic first WTI contract (1000 bbl, USD/bbl, \$1000 per \$1/bbl move, rolls on expiration). BCSL0090 is a spot crude index. For storable commodities, futures embed storage and convenience yield, so basis risk exceeds typical financial futures.
+
+\textbf{Key event:} April 2020 WTI stress (including negative prints on some contracts) and Cushing storage.
+
+\PairsTradingFigurePlaceholder{fig:pair5-scatter}{figures/pair5_cl1_bcsl_scatter.png}{Insert screenshot or export: \texttt{Pair 5: CL1 vs.\ BCSL0090 --- Daily Returns} scatterplot.}{CL1 vs.\ BCSL0090: daily return scatter.}
+
+\subsubsection*{Discussion}
+
+\textbf{How well do the returns track?}
+Correlation $\approx 0.986$, beta $\approx 0.978$, $R^2 \approx 0.973$, but spread volatility $\sim 138$~bps---much larger than equity/gold pairs---reflecting commodity basis risk.
+
+\textbf{Notable outliers.}
+Large basis shocks in March--April 2020; holiday/stale-index patterns (e.g.\ Thanksgiving 2021); some sessions with spot index at 0\% while futures move.
+
+\textbf{Pairs trading opportunity?}
+Not risk-free arbitrage: physical/storage/inventory and convenience yield dominate. Closer to statistical pairs trading on a risky basis after CL1 bid--ask, roll, margin, and basis risk.
+
+\textbf{Transaction costs (Bloomberg).}
+CL1 row in Table~\ref{tab:liquidity}; snapshot notes include session volume and open interest. BCSL0090 is an index, not a direct execution price for physical barrels.
+
+\end{document}
