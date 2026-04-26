@@ -17,3 +17,5 @@ Robustness of estimation => if i have all these parameters at think of they are 
 
 Time series regression => to see how your factors are exposed and to => ; 
 
+
+
