@@ -19,3 +19,13 @@ Time series regression => to see how your factors are exposed and to => ;
 
 
 
+
+Things to ask Damon: 
+1. Approach to missing data and justification 
+2. What about things like not trading biotech stocks? [Can't quantify the risk of these using factor models]
+3. Sources of error the largest ones you thought of 
+4. Assumptions of MVO 
+5. Approach to do MV: i) is the optimal value sharpe ratio or with the other speciifcation and what risk aversion coeffecient do we put in? 
+
+
+
