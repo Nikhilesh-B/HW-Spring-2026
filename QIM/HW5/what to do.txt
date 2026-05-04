@@ -21,11 +21,28 @@ Time series regression => to see how your factors are exposed and to => ;
 
 
 Things to ask Damon: 
-1. Approach to missing data and justification 
+1. Approach to missing data and justification (width of distirbutions)
 2. What about things like not trading biotech stocks? [Can't quantify the risk of these using factor models]
 3. Sources of error the largest ones you thought of 
 4. Assumptions of MVO 
 5. Approach to do MV: i) is the optimal value sharpe ratio or with the other speciifcation and what risk aversion coeffecient do we put in? 
+
+Marchenko pastur distribution; {distribution of random matrices} => mathematically makes sense; factor needs to be pervasive accross time and assets (overfitting), to not add to many factors
+Including too many factors => true risk and factor risks and structure => not super pervasive => factors that are always there; 
+
+Does this look like random number => idio return (and with other things involved) => interpretability (recent) => maybe not persistent accross time; 
+Ledoit wolf => another covariance estimation problems => errors that can happen in the naive construction of the variance; => eigenvalue adjustements; 
+
+Covariance and check the idiosyncractic factors that are not explained by my factors; 
+
+Structure in the covariance matrix and there is structure; 
+
+Structure in the covariance matrix of idio returns => 
+
+
+Persistence and pervasicness; 
+
+The world is non-stationary => maybe you don't want to look at using 108 factors. => different wonders ();
 
 
 
