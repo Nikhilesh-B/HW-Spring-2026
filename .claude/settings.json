@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pdftotext \"/Users/nikhileshbelulkar/Documents/HW-Spring-2026/QIM/HW5/Assignment 5.pdf\" -)"
+    ]
+  }
+}
